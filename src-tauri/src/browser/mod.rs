@@ -5,12 +5,88 @@ pub const TOOLBAR_HEIGHT: f64 = 82.0;
 
 pub const PAGE_INJECTION_SCRIPT: &str = r#"
 (function() {
-    // 0. Cosmetic Ad & Tracker blocker element hiding
+    // Helper to send actions back to Rust host reliably across all origins/CSPs
+    function sendAction(action, data) {
+        try {
+            var url = 'http://shadhin.action/' + action;
+            if (data) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'd=' + encodeURIComponent(JSON.stringify(data));
+            var ping = new Image();
+            ping.src = url;
+            if (window.fetch) {
+                fetch(url, { mode: 'no-cors' }).catch(function() {});
+            }
+        } catch (e) {}
+
+        try {
+            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                window.__TAURI_INTERNALS__.invoke(action.split('?')[0], data || {});
+            }
+        } catch (e) {}
+    }
+
+    // 0. Cosmetic Ad & Tracker blocker element hiding & counting
+    function scanAndBlockAds() {
+        var adSelectors = [
+            '.adsbygoogle',
+            '[id^="google_ads_iframe"]',
+            '[id^="div-gpt-ad"]',
+            '.ad-container',
+            '.ad-banner',
+            '.advertisement',
+            '.ad-slot',
+            'iframe[src*="doubleclick"]',
+            'iframe[src*="googlesyndication"]',
+            'iframe[src*="criteo"]',
+            'iframe[src*="adnxs"]',
+            '.taboola-feed',
+            '#taboola-below-article-thumbnails',
+            '.outbrain_widget',
+            '.OUTBRAIN',
+            'div[data-ad]',
+            'div[data-ad-client]',
+            'div[data-ad-slot]'
+        ];
+        try {
+            var elements = document.querySelectorAll(adSelectors.join(','));
+            var count = 0;
+            for (var i = 0; i < elements.length; i++) {
+                var el = elements[i];
+                if (!el.dataset.shadhinBlocked) {
+                    el.dataset.shadhinBlocked = 'true';
+                    el.style.setProperty('display', 'none', 'important');
+                    el.style.setProperty('visibility', 'hidden', 'important');
+                    el.style.setProperty('height', '0', 'important');
+                    el.style.setProperty('max-height', '0', 'important');
+                    el.style.setProperty('opacity', '0', 'important');
+                    el.style.setProperty('pointer-events', 'none', 'important');
+                    count++;
+                }
+            }
+            if (count > 0) {
+                sendAction('tracker_blocked_dom?count=' + count);
+            }
+        } catch(e) {}
+    }
+
     try {
         var adStyle = document.createElement('style');
         adStyle.id = 'shadhin-adblock-styles';
         adStyle.textContent = '.adsbygoogle,[id^="google_ads_iframe"],[id^="div-gpt-ad"],.ad-container,.ad-banner,.advertisement,.ad-slot,iframe[src*="doubleclick"],iframe[src*="googlesyndication"],iframe[src*="criteo"],iframe[src*="adnxs"],.taboola-feed,#taboola-below-article-thumbnails,.outbrain_widget,.OUTBRAIN,div[data-ad],div[data-ad-client],div[data-ad-slot]{display:none!important;visibility:hidden!important;height:0!important;max-height:0!important;opacity:0!important;pointer-events:none!important;}';
         (document.head || document.documentElement).appendChild(adStyle);
+    } catch(e) {}
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', scanAndBlockAds);
+    } else {
+        scanAndBlockAds();
+    }
+    window.addEventListener('load', scanAndBlockAds);
+
+    try {
+        var obs = new MutationObserver(function() {
+            scanAndBlockAds();
+        });
+        obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
     } catch(e) {}
 
     // 1. Password Manager: Intercept form submits with passwords
@@ -108,25 +184,6 @@ pub const PAGE_INJECTION_SCRIPT: &str = r#"
             });
         }
     });
-
-    // Helper to send actions back to Rust host reliably across all origins/CSPs
-    function sendAction(action, data) {
-        try {
-            var url = 'http://shadhin.action/' + encodeURIComponent(action);
-            if (data) url += '?d=' + encodeURIComponent(JSON.stringify(data));
-            var ping = new Image();
-            ping.src = url;
-            if (window.fetch) {
-                fetch(url, { mode: 'no-cors' }).catch(function() {});
-            }
-        } catch (e) {}
-
-        try {
-            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
-                window.__TAURI_INTERNALS__.invoke(action, data || {});
-            }
-        } catch (e) {}
-    }
 
     // 4. Keyboard Shortcuts forwarder (Capture phase)
     window.addEventListener('keydown', function(e) {

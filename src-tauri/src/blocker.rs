@@ -120,6 +120,10 @@ impl AdBlocker {
         self.blocked_count.load(Ordering::Relaxed)
     }
 
+    pub fn add_blocked(&self, count: usize) -> usize {
+        self.blocked_count.fetch_add(count, Ordering::Relaxed) + count
+    }
+
     pub fn is_blocked(&self, url_str: &str) -> bool {
         if !self.is_enabled() {
             return false;
@@ -135,14 +139,48 @@ impl AdBlocker {
             return false;
         };
 
-        // Exact match or subdomain match
+        // Exact match or subdomain match without extra allocations
         if self.blocked_domains.contains(host.as_str()) {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             return true;
         }
 
         for domain in &self.blocked_domains {
-            if host.ends_with(&format!(".{}", domain)) {
+            if host.ends_with(domain) {
+                if host.len() == domain.len()
+                    || host.as_bytes().get(host.len() - domain.len() - 1) == Some(&b'.')
+                {
+                    self.blocked_count.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
+            }
+        }
+
+        // Common tracker/telemetry path & query patterns
+        let lower = url_str.to_lowercase();
+        let tracker_patterns = &[
+            "/pagead/",
+            "/ads.js",
+            "/google-analytics.com/",
+            "/analytics.js",
+            "/gtm.js",
+            "facebook.com/tr",
+            "/fbevents.js",
+            "clarity.ms/tag",
+            "stats.g.doubleclick.net",
+            "/pixel.gif",
+            "/beacon.js",
+            "/telemetry",
+            "scorecardresearch.com",
+            "taboola.com",
+            "outbrain.com",
+            "criteo.com",
+            "adnxs.com",
+            "googlesyndication.com",
+        ];
+
+        for pattern in tracker_patterns {
+            if lower.contains(pattern) {
                 self.blocked_count.fetch_add(1, Ordering::Relaxed);
                 return true;
             }

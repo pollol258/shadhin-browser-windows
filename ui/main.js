@@ -617,6 +617,7 @@
         closeAllPopovers();
         if (isHidden) {
             updateTrackerPopoverState(adBlockEnabled);
+            updateBlockedCount();
             trackerPopover.classList.remove('hidden');
             expandToolbar(340);
         } else {
@@ -631,21 +632,27 @@
             .then(val => {
                 adBlockEnabled = val;
                 updateTrackerPopoverState(val);
+                updateBlockedCount();
             })
             .catch(console.error);
     });
 
+    // Direct real-time callback invoked from Rust via tb.eval
+    window.__onTrackerBlocked = function(count) {
+        const c = (typeof count === 'number') ? count : 0;
+        if (adblockBadge) adblockBadge.textContent = c;
+        const popCount = document.getElementById('tracker-popover-count');
+        if (popCount) popCount.textContent = c;
+    };
+
     function updateBlockedCount() {
         invoke('get_blocked_count')
             .then(count => {
-                const c = count || 0;
-                adblockBadge.textContent = c;
-                const popCount = document.getElementById('tracker-popover-count');
-                if (popCount) popCount.textContent = c;
+                window.__onTrackerBlocked(count);
             })
             .catch(() => {});
     }
-    setInterval(updateBlockedCount, 2000);
+    setInterval(updateBlockedCount, 1000);
 
     // ==========================================
     // Password Manager Banner & Vault
@@ -900,9 +907,7 @@
 
         listen('tracker-blocked', (e) => {
             if (e.payload && typeof e.payload.count === 'number') {
-                adblockBadge.textContent = e.payload.count;
-                const popCount = document.getElementById('tracker-popover-count');
-                if (popCount) popCount.textContent = e.payload.count;
+                window.__onTrackerBlocked(e.payload.count);
             }
         });
 

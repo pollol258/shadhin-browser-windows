@@ -73,17 +73,23 @@ pub async fn create_tab(
         if uri_str.starts_with("http://shadhin.action/") {
             *res.status_mut() = http::StatusCode::NO_CONTENT;
             let path = uri_str.strip_prefix("http://shadhin.action/").unwrap_or_default().to_string();
-            let action = path.split('?').next().unwrap_or_default().to_string();
             let app_h = app_action.clone();
-            handle_injected_action(&app_h, &action);
+            handle_injected_action(&app_h, &path);
             return;
         }
         if blocker.is_blocked(&uri_str) {
             *res.status_mut() = http::StatusCode::FORBIDDEN;
+            let count = blocker.get_blocked_count();
             let _ = app_action.emit("tracker-blocked", serde_json::json!({
-                "count": blocker.get_blocked_count(),
+                "count": count,
                 "url": uri_str
             }));
+            if let Some(tb) = app_action.get_webview("toolbar") {
+                let _ = tb.eval(&format!(
+                    "if (window.__onTrackerBlocked) {{ window.__onTrackerBlocked({}); }}",
+                    count
+                ));
+            }
         }
     });
 
@@ -547,17 +553,23 @@ pub async fn new_private_window(
         if uri_str.starts_with("http://shadhin.action/") {
             *res.status_mut() = http::StatusCode::NO_CONTENT;
             let path = uri_str.strip_prefix("http://shadhin.action/").unwrap_or_default().to_string();
-            let action = path.split('?').next().unwrap_or_default().to_string();
             let app_h = app_action.clone();
-            handle_injected_action(&app_h, &action);
+            handle_injected_action(&app_h, &path);
             return;
         }
         if blocker.is_blocked(&uri_str) {
             *res.status_mut() = http::StatusCode::FORBIDDEN;
+            let count = blocker.get_blocked_count();
             let _ = app_action.emit("tracker-blocked", serde_json::json!({
-                "count": blocker.get_blocked_count(),
+                "count": count,
                 "url": uri_str
             }));
+            if let Some(tb) = app_action.get_webview("toolbar") {
+                let _ = tb.eval(&format!(
+                    "if (window.__onTrackerBlocked) {{ window.__onTrackerBlocked({}); }}",
+                    count
+                ));
+            }
         }
     });
 
@@ -764,6 +776,33 @@ pub fn handle_injected_action(app: &AppHandle, action: &str) {
         }
         other if other.starts_with("switch_tab_") => {
             let _ = app.emit("trigger-shortcut", other);
+        }
+        action if action.starts_with("tracker_blocked_dom") => {
+            let count = if let Some(q) = action.split('?').nth(1) {
+                q.split('&')
+                    .find_map(|pair| {
+                        let mut parts = pair.split('=');
+                        if parts.next() == Some("count") {
+                            parts.next().and_then(|v| v.parse::<usize>().ok())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(1)
+            } else {
+                1
+            };
+
+            let total = state.ad_blocker.add_blocked(count);
+            let _ = app.emit("tracker-blocked", serde_json::json!({
+                "count": total
+            }));
+            if let Some(tb) = app.get_webview("toolbar") {
+                let _ = tb.eval(&format!(
+                    "if (window.__onTrackerBlocked) {{ window.__onTrackerBlocked({}); }}",
+                    total
+                ));
+            }
         }
         _ => {}
     }

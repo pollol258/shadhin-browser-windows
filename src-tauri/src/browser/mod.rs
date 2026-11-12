@@ -5,6 +5,14 @@ pub const TOOLBAR_HEIGHT: f64 = 82.0;
 
 pub const PAGE_INJECTION_SCRIPT: &str = r#"
 (function() {
+    // 0. Cosmetic Ad & Tracker blocker element hiding
+    try {
+        var adStyle = document.createElement('style');
+        adStyle.id = 'shadhin-adblock-styles';
+        adStyle.textContent = '.adsbygoogle,[id^="google_ads_iframe"],[id^="div-gpt-ad"],.ad-container,.ad-banner,.advertisement,.ad-slot,iframe[src*="doubleclick"],iframe[src*="googlesyndication"],iframe[src*="criteo"],iframe[src*="adnxs"],.taboola-feed,#taboola-below-article-thumbnails,.outbrain_widget,.OUTBRAIN,div[data-ad],div[data-ad-client],div[data-ad-slot]{display:none!important;visibility:hidden!important;height:0!important;max-height:0!important;opacity:0!important;pointer-events:none!important;}';
+        (document.head || document.documentElement).appendChild(adStyle);
+    } catch(e) {}
+
     // 1. Password Manager: Intercept form submits with passwords
     document.addEventListener('submit', function(e) {
         try {

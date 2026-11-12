@@ -14,7 +14,7 @@ impl AdBlocker {
 
         // High-profile advertising, telemetry, tracker networks (EasyList-lite & hosts)
         let default_list = &[
-            // Google Ads / DoubleClick / Analytics
+            // Google Ads / DoubleClick / Analytics / Tag Manager
             "doubleclick.net",
             "adservice.google.com",
             "googleads.g.doubleclick.net",
@@ -22,13 +22,18 @@ impl AdBlocker {
             "pagead2.googlesyndication.com",
             "google-analytics.com",
             "analytics.google.com",
+            "googletagmanager.com",
+            "googletagservices.com",
             // Facebook / Meta trackers
             "pixel.facebook.com",
             "an.facebook.com",
+            "connect.facebook.net",
             // Microsoft / Yahoo / Bing
             "bat.bing.com",
             "adnxs.com",
             "ib.adnxs.com",
+            "ads.yahoo.com",
+            "analytics.yahoo.com",
             // Amazon
             "amazon-adsystem.com",
             "aax.amazon-adsystem.com",
@@ -52,12 +57,24 @@ impl AdBlocker {
             "adroll.com",
             "advertising.com",
             "advertising.apple.com",
+            "media.net",
+            "sovrn.com",
+            "sharethrough.com",
+            "triplelift.com",
+            "revcontent.com",
+            "mgid.com",
+            "infolinks.com",
+            "popcash.net",
+            "popads.net",
+            "propellerads.com",
+            "adsterra.com",
             // Social analytics / Trackers
             "analytics.tiktok.com",
             "ads-twitter.com",
             "analytics.twitter.com",
             "ads.linkedin.com",
-            // User tracking / heatmaps
+            "snap.licdn.com",
+            // User tracking / heatmaps / Telemetry
             "hotjar.com",
             "static.hotjar.com",
             "clarity.ms",
@@ -66,6 +83,15 @@ impl AdBlocker {
             "segment.io",
             "cdn.segment.com",
             "newrelic.com",
+            // Cross-site fingerprinting / Cookie sync
+            "cdn.krxd.net",
+            "demdex.net",
+            "bluekai.com",
+            "exelator.com",
+            "agkn.com",
+            "rlcdn.com",
+            "tapad.com",
+            "id5-sync.com",
             // Crypto miners / malicious scripts
             "coinhive.com",
             "coin-hive.com",

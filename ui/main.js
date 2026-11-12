@@ -557,6 +557,9 @@
         trackerToggleBtn.textContent = enabled ? 'Turn Off' : 'Turn On';
         trackerToggleBtn.className = 'tracker-toggle-btn ' + (enabled ? 'btn-on' : 'btn-off');
         trackerShieldIcon.style.color = enabled ? '#34c759' : '#ff3b30';
+        // Update popover stats count
+        const popCount = document.getElementById('tracker-popover-count');
+        if (popCount) popCount.textContent = adblockBadge.textContent || '0';
         // Update badge / toolbar shield icon tint
         const shieldSpan = btnShield.querySelector('.shield-icon');
         if (shieldSpan) {
@@ -591,11 +594,14 @@
     function updateBlockedCount() {
         invoke('get_blocked_count')
             .then(count => {
-                adblockBadge.textContent = count || 0;
+                const c = count || 0;
+                adblockBadge.textContent = c;
+                const popCount = document.getElementById('tracker-popover-count');
+                if (popCount) popCount.textContent = c;
             })
             .catch(() => {});
     }
-    setInterval(updateBlockedCount, 2500);
+    setInterval(updateBlockedCount, 2000);
 
     // ==========================================
     // Password Manager Banner & Vault
@@ -784,14 +790,30 @@
 
         listen('download-started', (e) => {
             dlBadge.style.display = 'block';
+            const filename = (e.payload && e.payload.filename) || 'File';
+            showToast('Download started: ' + filename);
             if (downloadsPanel.style.display !== 'none') {
                 loadDownloads();
             }
         });
 
         listen('download-finished', (e) => {
+            const filename = (e.payload && e.payload.filename) || 'File';
+            if (e.payload && e.payload.success) {
+                showToast('Download complete: ' + filename);
+            } else {
+                showToast('Download failed: ' + filename);
+            }
             if (downloadsPanel.style.display !== 'none') {
                 loadDownloads();
+            }
+        });
+
+        listen('tracker-blocked', (e) => {
+            if (e.payload && typeof e.payload.count === 'number') {
+                adblockBadge.textContent = e.payload.count;
+                const popCount = document.getElementById('tracker-popover-count');
+                if (popCount) popCount.textContent = e.payload.count;
             }
         });
 

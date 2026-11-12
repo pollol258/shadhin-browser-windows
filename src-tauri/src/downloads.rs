@@ -86,6 +86,11 @@ impl DownloadManager {
         let _ = self.persist(&items);
     }
 
+    pub fn find_by_url(&self, url: &str) -> Option<DownloadItem> {
+        let items = self.items.lock().unwrap();
+        items.iter().find(|i| i.url == url).cloned()
+    }
+
     pub fn get_all(&self) -> Vec<DownloadItem> {
         self.items.lock().unwrap().clone()
     }

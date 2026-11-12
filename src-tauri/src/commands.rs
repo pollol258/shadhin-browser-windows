@@ -80,6 +80,10 @@ pub async fn create_tab(
         }
         if blocker.is_blocked(&uri_str) {
             *res.status_mut() = http::StatusCode::FORBIDDEN;
+            let _ = app_action.emit("tracker-blocked", serde_json::json!({
+                "count": blocker.get_blocked_count(),
+                "url": uri_str
+            }));
         }
     });
 
@@ -135,6 +139,10 @@ pub async fn create_tab(
                     let custom_path = std::path::Path::new(dir_str).join(fname);
                     *destination = custom_path;
                 }
+            } else if let Some(user_dl) = dirs::download_dir() {
+                if let Some(fname) = destination.file_name() {
+                    *destination = user_dl.join(fname);
+                }
             }
             let item = dl_mgr.register_download(url.as_str(), destination);
             let _ = app_dl.emit("download-started", &item);
@@ -142,9 +150,12 @@ pub async fn create_tab(
         }
         tauri::webview::DownloadEvent::Finished { url, success, .. } => {
             dl_mgr.complete_download_by_url(url.as_str(), success);
+            let item = dl_mgr.find_by_url(url.as_str());
             let _ = app_dl.emit("download-finished", serde_json::json!({
                 "url": url.as_str(),
-                "success": success
+                "success": success,
+                "filename": item.as_ref().map(|i| i.filename.clone()).unwrap_or_default(),
+                "save_path": item.as_ref().map(|i| i.save_path.clone()).unwrap_or_default()
             }));
             true
         }
@@ -543,7 +554,38 @@ pub async fn new_private_window(
         }
         if blocker.is_blocked(&uri_str) {
             *res.status_mut() = http::StatusCode::FORBIDDEN;
+            let _ = app_action.emit("tracker-blocked", serde_json::json!({
+                "count": blocker.get_blocked_count(),
+                "url": uri_str
+            }));
         }
+    });
+
+    let app_dl_pv = app.clone();
+    let dl_mgr_pv = state.download_manager.clone();
+    let wv_builder = wv_builder.on_download(move |_wv, event| match event {
+        tauri::webview::DownloadEvent::Requested { url, destination } => {
+            if let Some(user_dl) = dirs::download_dir() {
+                if let Some(fname) = destination.file_name() {
+                    *destination = user_dl.join(fname);
+                }
+            }
+            let item = dl_mgr_pv.register_download(url.as_str(), destination);
+            let _ = app_dl_pv.emit("download-started", &item);
+            true
+        }
+        tauri::webview::DownloadEvent::Finished { url, success, .. } => {
+            dl_mgr_pv.complete_download_by_url(url.as_str(), success);
+            let item = dl_mgr_pv.find_by_url(url.as_str());
+            let _ = app_dl_pv.emit("download-finished", serde_json::json!({
+                "url": url.as_str(),
+                "success": success,
+                "filename": item.as_ref().map(|i| i.filename.clone()).unwrap_or_default(),
+                "save_path": item.as_ref().map(|i| i.save_path.clone()).unwrap_or_default()
+            }));
+            true
+        }
+        _ => true,
     });
 
     win.add_child(

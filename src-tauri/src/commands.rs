@@ -666,6 +666,30 @@ pub fn focus_address_bar(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn set_toolbar_expanded(app: AppHandle, expanded: bool, height: Option<f64>) -> Result<(), String> {
+    if let Some(win) = app.get_window("main") {
+        let size = win.inner_size().map_err(|e| e.to_string())?;
+        let scale = win.scale_factor().unwrap_or(1.0);
+        let width = size.width as f64 / scale;
+        let win_height = size.height as f64 / scale;
+
+        let target_height = if expanded {
+            height.unwrap_or(win_height).min(win_height)
+        } else {
+            TOOLBAR_HEIGHT
+        };
+
+        if let Some(tb) = app.get_webview("toolbar") {
+            let _ = tb.set_size(LogicalSize::new(width, target_height));
+            if expanded {
+                let _ = tb.set_focus();
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn toggle_devtools(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let active_label = {
         let mgr = state.tab_manager.lock().unwrap();

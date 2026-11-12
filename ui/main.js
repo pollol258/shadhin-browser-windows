@@ -94,16 +94,19 @@
         confirmMessage.textContent = message;
         _confirmCallback = onConfirm;
         confirmModal.style.display = 'flex';
+        expandToolbar(260);
     }
 
     confirmOk.addEventListener('click', () => {
         confirmModal.style.display = 'none';
         if (_confirmCallback) { _confirmCallback(); _confirmCallback = null; }
+        checkAndCollapseToolbar();
     });
 
     confirmCancel.addEventListener('click', () => {
         confirmModal.style.display = 'none';
         _confirmCallback = null;
+        checkAndCollapseToolbar();
     });
 
     // Toast notification
@@ -116,6 +119,36 @@
         toast.textContent = message;
         document.body.appendChild(toast);
         setTimeout(() => { if (toast.parentNode) toast.remove(); }, duration);
+    }
+
+    // Dynamic Toolbar Height Expansion for Popovers and Overlays
+    function expandToolbar(height = 480) {
+        if (window.__TAURI__ || window.__TAURI_INTERNALS__) {
+            invoke('set_toolbar_expanded', { expanded: true, height: height }).catch(() => {});
+        }
+    }
+
+    function collapseToolbar() {
+        if (window.__TAURI__ || window.__TAURI_INTERNALS__) {
+            invoke('set_toolbar_expanded', { expanded: false, height: null }).catch(() => {});
+        }
+    }
+
+    function isAnyOverlayOpen() {
+        const isDownloads = downloadsPanel && downloadsPanel.style.display !== 'none';
+        const isMenu = menuPanel && menuPanel.style.display !== 'none';
+        const isTracker = trackerPopover && !trackerPopover.classList.contains('hidden');
+        const isSettings = settingsModal && settingsModal.style.display !== 'none';
+        const isAbout = aboutModal && aboutModal.style.display !== 'none';
+        const isConfirm = confirmModal && confirmModal.style.display !== 'none';
+        const isPwd = passwordBanner && passwordBanner.style.display !== 'none';
+        return isDownloads || isMenu || isTracker || isSettings || isAbout || isConfirm || isPwd;
+    }
+
+    function checkAndCollapseToolbar() {
+        if (!isAnyOverlayOpen()) {
+            collapseToolbar();
+        }
     }
 
     // ==========================================
@@ -406,6 +439,9 @@
             loadDownloads();
             downloadsPanel.style.display = 'flex';
             dlBadge.style.display = 'none';
+            expandToolbar(480);
+        } else {
+            checkAndCollapseToolbar();
         }
     }
 
@@ -485,6 +521,9 @@
         closeAllPopovers();
         if (!isVisible) {
             menuPanel.style.display = 'block';
+            expandToolbar(360);
+        } else {
+            checkAndCollapseToolbar();
         }
     }
 
@@ -542,10 +581,12 @@
     menuAbout.addEventListener('click', () => {
         closeAllPopovers();
         aboutModal.style.display = 'flex';
+        expandToolbar(450);
     });
 
     btnCloseAbout.addEventListener('click', () => {
         aboutModal.style.display = 'none';
+        checkAndCollapseToolbar();
     });
 
     // ==========================================
@@ -577,6 +618,9 @@
         if (isHidden) {
             updateTrackerPopoverState(adBlockEnabled);
             trackerPopover.classList.remove('hidden');
+            expandToolbar(340);
+        } else {
+            checkAndCollapseToolbar();
         }
     });
 
@@ -611,6 +655,7 @@
         pendingPasswordPrompt = data;
         pwdOrigin.textContent = data.origin || 'this website';
         passwordBanner.style.display = 'flex';
+        expandToolbar(220);
     }
 
     btnPwdSave.addEventListener('click', () => {
@@ -622,6 +667,7 @@
             }).then(() => {
                 passwordBanner.style.display = 'none';
                 pendingPasswordPrompt = null;
+                checkAndCollapseToolbar();
             }).catch(console.error);
         }
     });
@@ -629,11 +675,13 @@
     btnPwdDismiss.addEventListener('click', () => {
         passwordBanner.style.display = 'none';
         pendingPasswordPrompt = null;
+        checkAndCollapseToolbar();
     });
 
     btnPwdNever.addEventListener('click', () => {
         passwordBanner.style.display = 'none';
         pendingPasswordPrompt = null;
+        checkAndCollapseToolbar();
     });
 
     // ==========================================
@@ -641,7 +689,9 @@
     // ==========================================
 
     function openSettings(section) {
+        closeAllPopovers();
         settingsModal.style.display = 'flex';
+        expandToolbar(null);
 
         invoke('get_settings').then(settings => {
             if (settings) {
@@ -695,6 +745,7 @@
 
     btnCloseSettings.addEventListener('click', () => {
         settingsModal.style.display = 'none';
+        checkAndCollapseToolbar();
     });
 
     btnSaveSettings.addEventListener('click', () => {
@@ -713,6 +764,7 @@
         invoke('save_settings', { settings: updated })
             .then(() => {
                 settingsModal.style.display = 'none';
+                checkAndCollapseToolbar();
             })
             .catch(console.error);
     });
@@ -728,21 +780,58 @@
         });
     });
 
+    // Modal backdrop clicks
+    settingsModal.addEventListener('click', (e) => {
+        if (e.target === settingsModal) {
+            settingsModal.style.display = 'none';
+            checkAndCollapseToolbar();
+        }
+    });
+
+    aboutModal.addEventListener('click', (e) => {
+        if (e.target === aboutModal) {
+            aboutModal.style.display = 'none';
+            checkAndCollapseToolbar();
+        }
+    });
+
+    confirmModal.addEventListener('click', (e) => {
+        if (e.target === confirmModal) {
+            confirmModal.style.display = 'none';
+            _confirmCallback = null;
+            checkAndCollapseToolbar();
+        }
+    });
+
     function closeAllPopovers() {
         downloadsPanel.style.display = 'none';
         menuPanel.style.display = 'none';
         if (trackerPopover) trackerPopover.classList.add('hidden');
+        checkAndCollapseToolbar();
     }
 
     document.addEventListener('click', (e) => {
+        let changed = false;
         if (!downloadsPanel.contains(e.target) && e.target !== btnDownloads && !btnDownloads.contains(e.target)) {
-            downloadsPanel.style.display = 'none';
+            if (downloadsPanel.style.display !== 'none') {
+                downloadsPanel.style.display = 'none';
+                changed = true;
+            }
         }
         if (!menuPanel.contains(e.target) && e.target !== btnMenu && !btnMenu.contains(e.target)) {
-            menuPanel.style.display = 'none';
+            if (menuPanel.style.display !== 'none') {
+                menuPanel.style.display = 'none';
+                changed = true;
+            }
         }
         if (trackerPopover && !trackerPopover.contains(e.target) && e.target !== btnShield && !btnShield.contains(e.target)) {
-            trackerPopover.classList.add('hidden');
+            if (!trackerPopover.classList.contains('hidden')) {
+                trackerPopover.classList.add('hidden');
+                changed = true;
+            }
+        }
+        if (changed) {
+            checkAndCollapseToolbar();
         }
     });
 

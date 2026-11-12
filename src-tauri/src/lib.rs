@@ -83,6 +83,7 @@ pub fn run() {
             commands::on_login_submitted,
             commands::on_fullscreen_element_changed,
             commands::focus_address_bar,
+            commands::set_toolbar_expanded,
             commands::toggle_devtools,
         ])
         .setup(|app| {
@@ -101,6 +102,7 @@ pub fn run() {
 
             // Create top toolbar webview (Safari UI)
             let toolbar_builder = WebviewBuilder::new("toolbar", WebviewUrl::App("index.html".into()))
+                .transparent(true)
                 .auto_resize();
 
             let _toolbar = window.add_child(

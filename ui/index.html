@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadhin-Browser</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="safari-ui-body">
+
+    <!-- Safari Top Chrome / Toolbar Container -->
+    <div class="safari-chrome" data-tauri-drag-region>
+
+        <!-- Row 1: Address Bar & Controls -->
+        <div class="safari-header" data-tauri-drag-region>
+
+            <!-- Left Controls: Back, Forward, Bookmarks -->
+            <div class="left-controls" data-tauri-drag-region>
+                <button class="icon-btn" id="btn-back" title="Back (Alt+Left)">&#10094;</button>
+                <button class="icon-btn" id="btn-forward" title="Forward (Alt+Right)">&#10095;</button>
+                <button class="icon-btn" id="btn-bookmark" title="Bookmark this page">&#128278;</button>
+            </div>
+
+            <!-- Central Address Bar Group -->
+            <div class="safari-toolbar" data-tauri-drag-region>
+                <div class="address-group" id="address-group">
+                    <div class="safari-address-bar">
+                        <span class="security-icon" id="security-icon" title="Connection is secure">&#128274;</span>
+                        <input type="text" id="url-input" placeholder="Search DuckDuckGo or enter URL" spellcheck="false" autocomplete="off">
+                    </div>
+                    <button class="icon-btn reload-btn" id="btn-reload" title="Reload (Ctrl+R)">&#8635;</button>
+                    <!-- Loading Progress Bar -->
+                    <div class="address-progress" id="loading-bar"></div>
+                </div>
+            </div>
+
+            <!-- Right Controls: AdBlock Shield, Downloads, Menu, Traffic Lights -->
+            <div class="right-controls" data-tauri-drag-region>
+                <!-- Shield / AdBlocker Badge -->
+                <button class="icon-btn shield-btn" id="btn-shield" title="Ad & Tracker Protection">
+                    <span class="shield-icon">&#128737;</span>
+                    <span class="badge" id="adblock-badge">0</span>
+                </button>
+
+                <!-- Downloads Button -->
+                <button class="icon-btn downloads-btn" id="btn-downloads" title="Downloads">
+                    &#11015;
+                    <span class="dl-badge" id="dl-badge" style="display: none;"></span>
+                </button>
+
+                <!-- Menu Button -->
+                <button class="icon-btn" id="btn-menu" title="Menu">&#8801;</button>
+
+                <!-- Windows Traffic-Light Dots (Minimize, Maximize, Close) -->
+                <div class="window-dots">
+                    <span class="dot green" id="dot-green" title="Maximize / Restore"></span>
+                    <span class="dot yellow" id="dot-yellow" title="Minimize"></span>
+                    <span class="dot red" id="dot-red" title="Close"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Row 2: Safari Tab Strip (below address bar) -->
+        <div class="safari-tabbar" data-tauri-drag-region>
+            <!-- Scroll Left -->
+            <button class="tab-scroll-btn" id="tab-scroll-left" title="Scroll tabs left">&#10094;</button>
+
+            <!-- Tab List -->
+            <div class="tab-list" id="tab-list" data-tauri-drag-region>
+                <!-- Dynamic tabs injected by main.js -->
+            </div>
+
+            <!-- Scroll Right -->
+            <button class="tab-scroll-btn" id="tab-scroll-right" title="Scroll tabs right">&#10095;</button>
+
+            <!-- New Tab -->
+            <button class="new-tab-btn" id="btn-new-tab" title="New Tab (Ctrl+T)">&#43;</button>
+        </div>
+
+    </div>
+
+    <!-- Safari Password Save Prompt Banner -->
+    <div class="password-banner" id="password-banner" style="display: none;">
+        <div class="pwd-banner-content">
+            <span class="pwd-key-icon">&#128273;</span>
+            <div class="pwd-text">
+                <strong id="pwd-origin">example.com</strong>
+                <span>Would you like to save this password in your Windows DPAPI vault?</span>
+            </div>
+        </div>
+        <div class="pwd-banner-actions">
+            <button class="btn btn-secondary" id="btn-pwd-never">Never</button>
+            <button class="btn btn-secondary" id="btn-pwd-dismiss">Not Now</button>
+            <button class="btn btn-primary" id="btn-pwd-save">Save Password</button>
+        </div>
+    </div>
+
+    <!-- Tracker Protection Popover -->
+    <div id="tracker-popover" class="popover-panel tracker-popover hidden" role="dialog" aria-label="Tracker Protection">
+        <div class="tracker-popover-header">
+            <span class="tracker-shield-icon" id="tracker-shield-icon">🛡️</span>
+            <strong>Tracker Protection</strong>
+        </div>
+        <p class="tracker-status">
+            Ad &amp; Tracker Blocker is currently <strong><span id="tracker-state-text">Enabled</span></strong>
+        </p>
+        <button class="tracker-toggle-btn btn-on" id="tracker-toggle-btn">Turn Off</button>
+    </div>
+
+    <!-- Custom Confirm Dialog -->
+    <div class="modal-overlay" id="confirm-modal" style="display:none;" role="alertdialog" aria-modal="true">
+        <div class="confirm-dialog">
+            <p id="confirm-message">Are you sure?</p>
+            <div class="confirm-actions">
+                <button class="btn btn-secondary" id="confirm-cancel">Cancel</button>
+                <button class="btn btn-danger" id="confirm-ok">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Downloads Popover Panel -->
+    <div class="popover-panel downloads-popover" id="downloads-panel" style="display: none;">
+        <div class="popover-header">
+            <h4>Downloads</h4>
+            <button class="text-btn" id="btn-clear-downloads">Clear All</button>
+        </div>
+        <div class="popover-body downloads-list" id="downloads-list">
+            <div class="empty-state">No recent downloads</div>
+        </div>
+    </div>
+
+    <!-- Safari Main Menu Popover -->
+    <div class="popover-panel menu-popover" id="menu-panel" style="display: none;">
+        <div class="menu-item" id="menu-new-tab">
+            <span>New Tab</span>
+            <span class="shortcut">Ctrl+T</span>
+        </div>
+        <div class="menu-item" id="menu-new-private">
+            <span>New Private Window</span>
+            <span class="shortcut">Ctrl+Shift+N</span>
+        </div>
+        <div class="menu-divider"></div>
+        <div class="menu-item" id="menu-toggle-adblock">
+            <span>Block Ads & Trackers</span>
+            <span class="menu-check" id="menu-adblock-check">&#10003;</span>
+        </div>
+        <div class="menu-item" id="menu-bookmarks">
+            <span>Bookmarks</span>
+            <span class="shortcut">Ctrl+B</span>
+        </div>
+        <div class="menu-item" id="menu-passwords">
+            <span>Saved Passwords</span>
+            <span class="shortcut">DPAPI</span>
+        </div>
+        <div class="menu-divider"></div>
+        <div class="menu-item" id="menu-settings">
+            <span>Settings...</span>
+            <span class="shortcut">Ctrl+,</span>
+        </div>
+        <div class="menu-item" id="menu-clear-data">
+            <span>Clear Browsing Data...</span>
+        </div>
+        <div class="menu-divider"></div>
+        <div class="menu-item" id="menu-about">
+            <span>About Shadhin-Browser</span>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settings-modal" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Settings — Shadhin-Browser</h3>
+                <button class="modal-close-btn" id="btn-close-settings">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Search & General -->
+                <div class="settings-section">
+                    <h4>Search & General</h4>
+                    <div class="setting-row">
+                        <label for="setting-search-engine">Default Search Engine</label>
+                        <select id="setting-search-engine">
+                            <option value="duckduckgo">DuckDuckGo (Privacy Default)</option>
+                            <option value="google">Google</option>
+                            <option value="bing">Microsoft Bing</option>
+                            <option value="startpage">Startpage</option>
+                        </select>
+                    </div>
+                    <div class="setting-row">
+                        <label for="setting-homepage">Homepage URL</label>
+                        <input type="text" id="setting-homepage" placeholder="https://duckduckgo.com">
+                    </div>
+                    <div class="setting-row">
+                        <label for="setting-download-dir">Downloads Folder</label>
+                        <input type="text" id="setting-download-dir" placeholder="Default Downloads folder">
+                    </div>
+                </div>
+
+                <!-- Privacy & Security -->
+                <div class="settings-section">
+                    <h4>Privacy & Security</h4>
+                    <div class="setting-toggle-row">
+                        <label>
+                            <input type="checkbox" id="setting-adblock">
+                            <span>Enable Tracker & Ad Blocker (Hosts + EasyList)</span>
+                        </label>
+                    </div>
+                    <div class="setting-toggle-row">
+                        <label>
+                            <input type="checkbox" id="setting-cookies">
+                            <span>Block third-party tracking cookies</span>
+                        </label>
+                    </div>
+                    <div class="setting-toggle-row">
+                        <label>
+                            <input type="checkbox" id="setting-dnt">
+                            <span>Send "Do Not Track" and Global Privacy Control headers</span>
+                        </label>
+                    </div>
+                    <div class="setting-toggle-row">
+                        <label>
+                            <input type="checkbox" id="setting-clear-exit">
+                            <span>Clear browsing history and cache on exit</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Password Vault -->
+                <div class="settings-section">
+                    <h4>Windows DPAPI Password Manager</h4>
+                    <div class="setting-toggle-row">
+                        <label>
+                            <input type="checkbox" id="setting-pwd-manager">
+                            <span>Offer to save passwords for websites</span>
+                        </label>
+                    </div>
+                    <div class="vault-container">
+                        <div class="vault-header">Saved Logins in Protected Vault</div>
+                        <div class="vault-list" id="vault-list">
+                            <div class="empty-state">No saved passwords</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Data Cleanup -->
+                <div class="settings-section">
+                    <h4>Browsing Data</h4>
+                    <button class="btn btn-danger" id="btn-clear-now">Clear Browsing Data Now...</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="btn-save-settings">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- About Modal -->
+    <div class="modal-overlay" id="about-modal" style="display: none;">
+        <div class="modal-dialog about-dialog">
+            <div class="modal-header">
+                <h3>About Shadhin-Browser</h3>
+                <button class="modal-close-btn" id="btn-close-about">&times;</button>
+            </div>
+            <div class="modal-body text-center">
+                <h2>Shadhin-Browser</h2>
+                <p class="about-version">Version 1.0.0 (Windows x64)</p>
+                <p class="about-desc">
+                    A fast, privacy-first desktop web browser built with Tauri 2, Rust, and WebView2.
+                    Features built-in ad/tracker blocking, Windows DPAPI hardware-backed password security,
+                    and clean Safari aesthetics.
+                </p>
+                <div class="about-tech">
+                    <span>Tauri 2.12</span> &bull; <span>Rust 2021</span> &bull; <span>WebView2</span> &bull; <span>Windows DPAPI</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>

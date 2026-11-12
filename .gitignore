@@ -1,0 +1,23 @@
+# Rust / Cargo
+target/
+src-tauri/target/
+tauri-2.12.5/
+**/*.rs.bk
+Cargo.lock
+
+# Node / Web
+node_modules/
+dist/
+
+# Operating System
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*.tmp
+
+# IDE / Editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

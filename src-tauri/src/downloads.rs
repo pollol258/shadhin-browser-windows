@@ -82,13 +82,29 @@ impl DownloadManager {
             } else {
                 "failed".to_string()
             };
+        } else if let Some(item) = items.iter_mut().find(|i| (i.url == url || url.contains(&i.filename)) && i.status == "downloading") {
+            item.status = if success {
+                "completed".to_string()
+            } else {
+                "failed".to_string()
+            };
+        } else if let Some(item) = items.iter_mut().find(|i| i.status == "downloading") {
+            item.status = if success {
+                "completed".to_string()
+            } else {
+                "failed".to_string()
+            };
         }
         let _ = self.persist(&items);
     }
 
     pub fn find_by_url(&self, url: &str) -> Option<DownloadItem> {
         let items = self.items.lock().unwrap();
-        items.iter().find(|i| i.url == url).cloned()
+        items.iter()
+            .find(|i| i.url == url)
+            .or_else(|| items.iter().find(|i| url.contains(&i.filename)))
+            .or_else(|| items.first())
+            .cloned()
     }
 
     pub fn get_all(&self) -> Vec<DownloadItem> {

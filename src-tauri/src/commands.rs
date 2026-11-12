@@ -140,29 +140,62 @@ pub async fn create_tab(
     builder = builder.on_download(move |_wv, event| match event {
         tauri::webview::DownloadEvent::Requested { url, destination } => {
             let settings = settings_mgr.get();
-            if let Some(ref dir_str) = settings.download_dir {
-                if let Some(fname) = destination.file_name() {
-                    let custom_path = std::path::Path::new(dir_str).join(fname);
-                    *destination = custom_path;
-                }
-            } else if let Some(user_dl) = dirs::download_dir() {
-                if let Some(fname) = destination.file_name() {
-                    *destination = user_dl.join(fname);
-                }
-            }
+            let target_dir = settings
+                .download_dir
+                .as_ref()
+                .map(PathBuf::from)
+                .or_else(dirs::download_dir)
+                .unwrap_or_else(|| PathBuf::from("."));
+
+            let fname = destination
+                .file_name()
+                .and_then(|f| f.to_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    url.path_segments()
+                        .and_then(|segments| segments.last())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "download.bin".to_string());
+
+            let safe_fname: String = fname
+                .chars()
+                .map(|c| match c {
+                    '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                    other => other,
+                })
+                .collect();
+
+            *destination = target_dir.join(&safe_fname);
+
             let item = dl_mgr.register_download(url.as_str(), destination);
             let _ = app_dl.emit("download-started", &item);
+            if let Some(tb) = app_dl.get_webview("toolbar") {
+                let _ = tb.eval(&format!(
+                    "if (window.__onDownloadStarted) {{ window.__onDownloadStarted({}); }}",
+                    serde_json::to_string(&item).unwrap_or_default()
+                ));
+            }
             true
         }
         tauri::webview::DownloadEvent::Finished { url, success, .. } => {
             dl_mgr.complete_download_by_url(url.as_str(), success);
             let item = dl_mgr.find_by_url(url.as_str());
-            let _ = app_dl.emit("download-finished", serde_json::json!({
+            let payload = serde_json::json!({
                 "url": url.as_str(),
                 "success": success,
                 "filename": item.as_ref().map(|i| i.filename.clone()).unwrap_or_default(),
                 "save_path": item.as_ref().map(|i| i.save_path.clone()).unwrap_or_default()
-            }));
+            });
+            let _ = app_dl.emit("download-finished", &payload);
+            if let Some(tb) = app_dl.get_webview("toolbar") {
+                let _ = tb.eval(&format!(
+                    "if (window.__onDownloadFinished) {{ window.__onDownloadFinished({}); }}",
+                    serde_json::to_string(&payload).unwrap_or_default()
+                ));
+            }
             true
         }
         _ => true,
@@ -577,24 +610,56 @@ pub async fn new_private_window(
     let dl_mgr_pv = state.download_manager.clone();
     let wv_builder = wv_builder.on_download(move |_wv, event| match event {
         tauri::webview::DownloadEvent::Requested { url, destination } => {
-            if let Some(user_dl) = dirs::download_dir() {
-                if let Some(fname) = destination.file_name() {
-                    *destination = user_dl.join(fname);
-                }
-            }
+            let target_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
+            let fname = destination
+                .file_name()
+                .and_then(|f| f.to_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    url.path_segments()
+                        .and_then(|segments| segments.last())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "download.bin".to_string());
+
+            let safe_fname: String = fname
+                .chars()
+                .map(|c| match c {
+                    '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                    other => other,
+                })
+                .collect();
+
+            *destination = target_dir.join(&safe_fname);
+
             let item = dl_mgr_pv.register_download(url.as_str(), destination);
             let _ = app_dl_pv.emit("download-started", &item);
+            if let Some(tb) = app_dl_pv.get_webview("toolbar") {
+                let _ = tb.eval(&format!(
+                    "if (window.__onDownloadStarted) {{ window.__onDownloadStarted({}); }}",
+                    serde_json::to_string(&item).unwrap_or_default()
+                ));
+            }
             true
         }
         tauri::webview::DownloadEvent::Finished { url, success, .. } => {
             dl_mgr_pv.complete_download_by_url(url.as_str(), success);
             let item = dl_mgr_pv.find_by_url(url.as_str());
-            let _ = app_dl_pv.emit("download-finished", serde_json::json!({
+            let payload = serde_json::json!({
                 "url": url.as_str(),
                 "success": success,
                 "filename": item.as_ref().map(|i| i.filename.clone()).unwrap_or_default(),
                 "save_path": item.as_ref().map(|i| i.save_path.clone()).unwrap_or_default()
-            }));
+            });
+            let _ = app_dl_pv.emit("download-finished", &payload);
+            if let Some(tb) = app_dl_pv.get_webview("toolbar") {
+                let _ = tb.eval(&format!(
+                    "if (window.__onDownloadFinished) {{ window.__onDownloadFinished({}); }}",
+                    serde_json::to_string(&payload).unwrap_or_default()
+                ));
+            }
             true
         }
         _ => true,

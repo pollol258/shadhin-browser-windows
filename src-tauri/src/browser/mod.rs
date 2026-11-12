@@ -310,5 +310,17 @@ pub const PAGE_INJECTION_SCRIPT: &str = r#"
             document.documentElement.style.zoom = pageZoomLevel;
         }
     }, { passive: false });
+
+    // 6. Download links & target="_blank" safety handler
+    document.addEventListener('click', function(e) {
+        var a = e.target.closest('a');
+        if (!a || !a.href) return;
+        var href = a.href;
+        var hasDownload = a.hasAttribute('download');
+        var isDownloadFile = /\.(zip|exe|tar|gz|pdf|mp3|mp4|apk|iso|dmg|msi|rar|7z|csv|xlsx|docx|bin|dmg|pkg)(\?.*)?$/i.test(href);
+        if (a.target === '_blank' && (hasDownload || isDownloadFile)) {
+            a.target = '_self';
+        }
+    }, true);
 })();
 "#;

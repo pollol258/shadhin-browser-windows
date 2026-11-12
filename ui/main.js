@@ -432,6 +432,29 @@
     // Downloads Popover
     // ==========================================
 
+    // Direct real-time callback invoked from Rust via tb.eval
+    window.__onDownloadStarted = function(item) {
+        if (dlBadge) dlBadge.style.display = 'block';
+        const filename = (item && item.filename) || 'File';
+        showToast('Download started: ' + filename);
+        loadDownloads();
+    };
+
+    window.__onDownloadFinished = function(payload) {
+        if (dlBadge) dlBadge.style.display = 'none';
+        const filename = (payload && payload.filename) || 'File';
+        if (payload && payload.success) {
+            showToast('Download complete: ' + filename);
+        } else {
+            showToast('Download failed: ' + filename);
+        }
+        loadDownloads();
+        // Automatically open downloads popover on completion so user sees the download list immediately
+        if (downloadsPanel && downloadsPanel.style.display === 'none') {
+            toggleDownloads();
+        }
+    };
+
     function toggleDownloads() {
         const isVisible = downloadsPanel.style.display !== 'none';
         closeAllPopovers();
@@ -467,7 +490,7 @@
 
                     const statusSpan = document.createElement('span');
                     statusSpan.className = 'download-status ' + item.status;
-                    statusSpan.textContent = item.status === 'completed' ? '✓ Completed' : item.status;
+                    statusSpan.textContent = item.status === 'completed' ? '✓ Completed' : (item.status === 'downloading' ? '⏳ Downloading...' : item.status);
 
                     header.appendChild(nameSpan);
                     header.appendChild(statusSpan);
@@ -498,7 +521,10 @@
                     downloadsList.appendChild(row);
                 });
             })
-            .catch(console.error);
+            .catch(err => {
+                console.error('Failed to load downloads:', err);
+                downloadsList.innerHTML = '<div class="empty-state">No recent downloads</div>';
+            });
     }
 
     btnDownloads.addEventListener('click', (e) => {
@@ -885,23 +911,14 @@
         });
 
         listen('download-started', (e) => {
-            dlBadge.style.display = 'block';
-            const filename = (e.payload && e.payload.filename) || 'File';
-            showToast('Download started: ' + filename);
-            if (downloadsPanel.style.display !== 'none') {
-                loadDownloads();
+            if (window.__onDownloadStarted) {
+                window.__onDownloadStarted(e.payload);
             }
         });
 
         listen('download-finished', (e) => {
-            const filename = (e.payload && e.payload.filename) || 'File';
-            if (e.payload && e.payload.success) {
-                showToast('Download complete: ' + filename);
-            } else {
-                showToast('Download failed: ' + filename);
-            }
-            if (downloadsPanel.style.display !== 'none') {
-                loadDownloads();
+            if (window.__onDownloadFinished) {
+                window.__onDownloadFinished(e.payload);
             }
         });
 

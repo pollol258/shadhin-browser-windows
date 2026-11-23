@@ -942,8 +942,14 @@ pub fn hook_tab_download(
                         // Option A: Auto-save immediately to downloads directory with unique filename
                         // Zero UI hang: never block with synchronous dialog or .join() on the STA UI thread
                         let final_dest: PathBuf = if settings.ask_download_location {
-                            pick_save_file(&default_dir, &raw_filename)
-                                .unwrap_or_else(|| resolve_unique_filepath(&default_dir, &raw_filename))
+                            match pick_save_file(&default_dir, &raw_filename) {
+                                Some(chosen_path) => chosen_path,
+                                None => {
+                                    let _ = args.SetCancel(true);
+                                    let _ = args.SetHandled(true);
+                                    return Ok(());
+                                }
+                            }
                         } else {
                             resolve_unique_filepath(&default_dir, &raw_filename)
                         };

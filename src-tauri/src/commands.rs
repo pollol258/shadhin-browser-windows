@@ -193,26 +193,29 @@ pub async fn create_tab(
         }));
     });
 
-    // Option A: Non-blocking download handling (Fastest & Zero-Hang)
-    let st_dl = state.settings_manager.clone();
-    builder = builder.on_download(move |_wv, event| match event {
-        tauri::webview::DownloadEvent::Requested { destination, .. } => {
-            let settings = st_dl.get();
-            let default_dir = settings
-                .download_dir
-                .as_ref()
-                .map(PathBuf::from)
-                .or_else(dirs::download_dir)
-                .unwrap_or_else(|| PathBuf::from("."));
-            let raw = destination
-                .file_name()
-                .and_then(|f| f.to_str())
-                .unwrap_or("download.bin");
-            *destination = crate::downloads::resolve_unique_filepath(&default_dir, raw);
-            true
-        }
-        _ => true,
-    });
+    // Option A: Non-blocking download handling for non-Windows platforms (Windows uses native COM hook)
+    #[cfg(not(windows))]
+    {
+        let st_dl = state.settings_manager.clone();
+        builder = builder.on_download(move |_wv, event| match event {
+            tauri::webview::DownloadEvent::Requested { destination, .. } => {
+                let settings = st_dl.get();
+                let default_dir = settings
+                    .download_dir
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .or_else(dirs::download_dir)
+                    .unwrap_or_else(|| PathBuf::from("."));
+                let raw = destination
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("download.bin");
+                *destination = crate::downloads::resolve_unique_filepath(&default_dir, raw);
+                true
+            }
+            _ => true,
+        });
+    }
 
     // Page load status update and deferred native hooks
     let app_load = app.clone();
@@ -753,25 +756,28 @@ fn spawn_browser_window(
         }
     });
 
-    let st_dl_win = state.settings_manager.clone();
-    let win_builder = win_builder.on_download(move |_wv, event| match event {
-        tauri::webview::DownloadEvent::Requested { destination, .. } => {
-            let settings = st_dl_win.get();
-            let default_dir = settings
-                .download_dir
-                .as_ref()
-                .map(PathBuf::from)
-                .or_else(dirs::download_dir)
-                .unwrap_or_else(|| PathBuf::from("."));
-            let raw = destination
-                .file_name()
-                .and_then(|f| f.to_str())
-                .unwrap_or("download.bin");
-            *destination = crate::downloads::resolve_unique_filepath(&default_dir, raw);
-            true
-        }
-        _ => true,
-    });
+    #[cfg(not(windows))]
+    let win_builder = {
+        let st_dl_win = state.settings_manager.clone();
+        win_builder.on_download(move |_wv, event| match event {
+            tauri::webview::DownloadEvent::Requested { destination, .. } => {
+                let settings = st_dl_win.get();
+                let default_dir = settings
+                    .download_dir
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .or_else(dirs::download_dir)
+                    .unwrap_or_else(|| PathBuf::from("."));
+                let raw = destination
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("download.bin");
+                *destination = crate::downloads::resolve_unique_filepath(&default_dir, raw);
+                true
+            }
+            _ => true,
+        })
+    };
 
     let _win = win_builder
         .build()

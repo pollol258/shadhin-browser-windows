@@ -3,6 +3,15 @@
 
 ---
 
+## 📥 Download & Install (Windows)
+
+🚀 **[Download Latest Windows Release (.exe)](https://github.com/pollol258/shadhin-browser-windows/releases/latest)**
+
+> [!NOTE]
+> **Windows SmartScreen Notice:** Since this installer is an open-source community release without an enterprise EV code signing certificate, Windows SmartScreen may display a *"Windows protected your PC"* prompt on first launch. Simply click **"More info"** → **"Run anyway"** to install and launch the browser.
+
+---
+
 ## 🌟 Overview
 
 **Shadhin Browser (Windows Edition)** is a fast, memory-efficient, and privacy-first desktop web browser for Windows 10 and 11. It pairs an Apple Safari-inspired frameless header with an isolated multi-webview child architecture powered by Microsoft WebView2 and Rust.

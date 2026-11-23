@@ -68,6 +68,7 @@ pub struct DownloadItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct DownloadProgressPayload {
     pub id: String,
+    pub filename: String,
     pub received_bytes: u64,
     pub total_bytes: Option<u64>,
     pub speed_bps: u64,
@@ -81,16 +82,18 @@ pub struct ProgressTracker {
     pub last_bytes: u64,
     pub smoothed_speed: f64,
     pub last_emit: std::time::Instant,
+    pub filename: String,
 }
 
 impl ProgressTracker {
-    pub fn new(initial_bytes: u64) -> Self {
+    pub fn new(initial_bytes: u64, filename: String) -> Self {
         let now = std::time::Instant::now();
         Self {
             last_update: now,
             last_bytes: initial_bytes,
             smoothed_speed: 0.0,
             last_emit: now,
+            filename,
         }
     }
 
@@ -117,8 +120,8 @@ impl ProgressTracker {
             None
         };
 
-        // Throttle updates to ~4 per second (every 250ms)
-        let should_emit = self.last_emit.elapsed() >= std::time::Duration::from_millis(250);
+        // Throttle updates to ~5 per second (every 200ms) to prevent IPC flooding
+        let should_emit = self.last_emit.elapsed() >= std::time::Duration::from_millis(200);
         if should_emit {
             self.last_emit = now;
         }
@@ -176,6 +179,7 @@ impl DownloadManager {
     }
 
     #[cfg(windows)]
+    #[allow(clippy::too_many_arguments)]
     pub fn register_download(
         &self,
         id: String,
@@ -196,7 +200,7 @@ impl DownloadManager {
             id: id.clone(),
             url: url.to_string(),
             source_domain: source_domain.to_string(),
-            filename,
+            filename: filename.clone(),
             save_path: destination.to_string_lossy().to_string(),
             total_bytes,
             received_bytes: 0,
@@ -214,26 +218,37 @@ impl DownloadManager {
         }
         {
             let mut trackers = self.progress_trackers.lock().unwrap();
-            trackers.insert(id, ProgressTracker::new(0));
+            trackers.insert(id, ProgressTracker::new(0, filename));
         }
 
-        let mut items = self.items.lock().unwrap();
-        items.insert(0, item.clone());
-        let _ = self.persist(&items);
+        let snapshot = {
+            let mut items = self.items.lock().unwrap();
+            items.insert(0, item.clone());
+            items.clone()
+        };
+
+        // Non-blocking background persistence
+        Self::persist_async(self.file_path.clone(), snapshot);
+
         item
     }
 
     pub fn notify_start(&self, app: &AppHandle, item: &DownloadItem, settings_mgr: &SettingsManager) {
-        let _ = app.emit("download-started", item);
-        let settings = settings_mgr.get();
-        if let Some(tb) = app.get_webview("toolbar") {
-            let item_json = serde_json::to_string(item).unwrap_or_default();
-            let auto_open = settings.auto_open_downloads_panel;
-            let _ = tb.eval(&format!(
-                "if (window.__onDownloadStarted) {{ window.__onDownloadStarted({}, {}); }}",
-                item_json, auto_open
-            ));
-        }
+        let app_h = app.clone();
+        let item_c = item.clone();
+        let auto_open = settings_mgr.get().auto_open_downloads_panel;
+
+        // Dispatch asynchronously so tb.eval and IPC never block the active STA COM stack
+        tauri::async_runtime::spawn(async move {
+            let _ = app_h.emit("download-started", &item_c);
+            if let Some(tb) = app_h.get_webview("toolbar") {
+                let item_json = serde_json::to_string(&item_c).unwrap_or_default();
+                let _ = tb.eval(format!(
+                    "if (window.__onDownloadStarted) {{ window.__onDownloadStarted({}, {}); }}",
+                    item_json, auto_open
+                ));
+            }
+        });
     }
 
     pub fn on_progress(
@@ -243,14 +258,20 @@ impl DownloadManager {
         received_bytes: u64,
         total_bytes: Option<u64>,
     ) {
-        let (speed, eta, should_emit) = {
+        let (speed, eta, filename, should_emit) = {
             let mut trackers = self.progress_trackers.lock().unwrap();
             if let Some(tracker) = trackers.get_mut(id) {
-                tracker.update(received_bytes, total_bytes)
+                let (s, e, emit) = tracker.update(received_bytes, total_bytes);
+                (s, e, tracker.filename.clone(), emit)
             } else {
-                (0, None, true)
+                (0, None, "download.bin".to_string(), true)
             }
         };
+
+        // Fast exit when throttled: avoid touching items lock and skip IPC dispatch
+        if !should_emit {
+            return;
+        }
 
         let mut current_state = "in_progress".to_string();
         {
@@ -264,25 +285,27 @@ impl DownloadManager {
             }
         }
 
-        if should_emit {
-            let payload = DownloadProgressPayload {
-                id: id.to_string(),
-                received_bytes,
-                total_bytes,
-                speed_bps: speed,
-                eta_seconds: eta,
-                state: current_state,
-            };
+        let payload = DownloadProgressPayload {
+            id: id.to_string(),
+            filename,
+            received_bytes,
+            total_bytes,
+            speed_bps: speed,
+            eta_seconds: eta,
+            state: current_state,
+        };
 
-            let _ = app.emit("download-progress", &payload);
-            if let Some(tb) = app.get_webview("toolbar") {
+        let app_h = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = app_h.emit("download-progress", &payload);
+            if let Some(tb) = app_h.get_webview("toolbar") {
                 let payload_json = serde_json::to_string(&payload).unwrap_or_default();
-                let _ = tb.eval(&format!(
+                let _ = tb.eval(format!(
                     "if (window.__onDownloadProgress) {{ window.__onDownloadProgress({}); }}",
                     payload_json
                 ));
             }
-        }
+        });
     }
 
     pub fn on_state_changed(
@@ -296,9 +319,9 @@ impl DownloadManager {
         let finished = matches!(new_state, "completed" | "failed" | "cancelled" | "interrupted");
         let now_str = chrono::Local::now().to_rfc3339();
 
-        let updated_item = {
+        let (updated_item, snapshot) = {
             let mut items = self.items.lock().unwrap();
-            if let Some(item) = items.iter_mut().find(|i| i.id == id) {
+            let opt = if let Some(item) = items.iter_mut().find(|i| i.id == id) {
                 item.state = new_state.to_string();
                 item.status = new_state.to_string();
                 if let Some(err) = error_reason.clone() {
@@ -313,7 +336,8 @@ impl DownloadManager {
                 Some(item.clone())
             } else {
                 None
-            }
+            };
+            (opt, items.clone())
         };
 
         if finished {
@@ -326,20 +350,28 @@ impl DownloadManager {
             trackers.remove(id);
         }
 
-        let _ = self.persist(&self.items.lock().unwrap());
+        // Non-blocking async persistence in background threadpool
+        Self::persist_async(self.file_path.clone(), snapshot);
 
         if let Some(item) = updated_item {
-            let _ = app.emit("download-state-changed", &item);
+            let app_h = app.clone();
             let settings = settings_mgr.get();
-            if let Some(tb) = app.get_webview("toolbar") {
-                let item_json = serde_json::to_string(&item).unwrap_or_default();
-                let auto_open = settings.auto_open_downloads_panel;
-                let show_notif = settings.show_download_notification;
-                let _ = tb.eval(&format!(
-                    "if (window.__onDownloadStateChanged) {{ window.__onDownloadStateChanged({}, {}, {}); }}",
-                    item_json, auto_open, show_notif
-                ));
-            }
+            let auto_open = settings.auto_open_downloads_panel;
+            let show_notif = settings.show_download_notification;
+
+            tauri::async_runtime::spawn(async move {
+                let _ = app_h.emit("download-state-changed", &item);
+                if finished {
+                    let _ = app_h.emit("download-finished", &item);
+                }
+                if let Some(tb) = app_h.get_webview("toolbar") {
+                    let item_json = serde_json::to_string(&item).unwrap_or_default();
+                    let _ = tb.eval(format!(
+                        "if (window.__onDownloadStateChanged) {{ window.__onDownloadStateChanged({}, {}, {}); }}",
+                        item_json, auto_open, show_notif
+                    ));
+                }
+            });
         }
     }
 
@@ -421,27 +453,35 @@ impl DownloadManager {
     }
 
     pub fn remove(&self, id: &str) -> Result<(), String> {
-        let mut items = self.items.lock().unwrap();
-        items.retain(|i| i.id != id);
-        self.persist(&items).map_err(|e| e.to_string())
+        let snapshot = {
+            let mut items = self.items.lock().unwrap();
+            items.retain(|i| i.id != id);
+            items.clone()
+        };
+        Self::persist_async(self.file_path.clone(), snapshot);
+        Ok(())
     }
 
     pub fn delete_file(&self, id: &str) -> Result<(), String> {
-        let mut save_path_opt = None;
-        {
+        let (save_path_opt, snapshot) = {
             let mut items = self.items.lock().unwrap();
-            if let Some(pos) = items.iter().position(|i| i.id == id) {
+            let path = if let Some(pos) = items.iter().position(|i| i.id == id) {
                 let item = items.remove(pos);
-                save_path_opt = Some(item.save_path);
-            }
-            let _ = self.persist(&items);
-        }
+                Some(item.save_path)
+            } else {
+                None
+            };
+            (path, items.clone())
+        };
+        Self::persist_async(self.file_path.clone(), snapshot);
 
         if let Some(path_str) = save_path_opt {
-            let p = Path::new(&path_str);
-            if p.exists() {
-                let _ = fs::remove_file(p);
-            }
+            tauri::async_runtime::spawn_blocking(move || {
+                let p = Path::new(&path_str);
+                if p.exists() {
+                    let _ = fs::remove_file(p);
+                }
+            });
         }
         Ok(())
     }
@@ -465,9 +505,12 @@ impl DownloadManager {
     }
 
     pub fn clear(&self) -> anyhow::Result<()> {
-        let mut items = self.items.lock().unwrap();
-        items.retain(|i| i.state == "in_progress" || i.state == "paused");
-        self.persist(&items)?;
+        let snapshot = {
+            let mut items = self.items.lock().unwrap();
+            items.retain(|i| i.state == "in_progress" || i.state == "paused");
+            items.clone()
+        };
+        Self::persist_async(self.file_path.clone(), snapshot);
         Ok(())
     }
 
@@ -533,22 +576,24 @@ impl DownloadManager {
         Ok(())
     }
 
-    fn persist(&self, items: &[DownloadItem]) -> anyhow::Result<()> {
-        if let Some(parent) = self.file_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        // Cap history at 500 items
-        let capped = if items.len() > 500 {
-            &items[..500]
-        } else {
-            items
-        };
-        let json = serde_json::to_string_pretty(capped)?;
-        // Atomic write: write to temp file then rename
-        let tmp_path = self.file_path.with_extension("tmp");
-        fs::write(&tmp_path, json)?;
-        fs::rename(&tmp_path, &self.file_path)?;
-        Ok(())
+    fn persist_async(file_path: PathBuf, items: Vec<DownloadItem>) {
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = (|| -> anyhow::Result<()> {
+                if let Some(parent) = file_path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let capped = if items.len() > 500 {
+                    &items[..500]
+                } else {
+                    &items[..]
+                };
+                let json = serde_json::to_string_pretty(capped)?;
+                let tmp_path = file_path.with_extension("tmp");
+                fs::write(&tmp_path, json)?;
+                fs::rename(&tmp_path, &file_path)?;
+                Ok(())
+            })();
+        });
     }
 }
 
@@ -575,7 +620,7 @@ pub fn sanitize_filename(raw: &str) -> String {
         s = "download.bin".to_string();
     }
 
-    // Check Windows reserved names (anything before the first dot, e.g. CON, NUL.txt, COM1.tar.gz)
+    // Check Windows reserved names
     let base_name = s.split('.').next().unwrap_or("").to_uppercase();
 
     let reserved = [
@@ -664,14 +709,14 @@ pub fn pick_folder() -> Option<PathBuf> {
                         | windows::Win32::UI::Shell::FOS_PATHMUSTEXIST,
                 );
 
-                let owner_hwnd = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+                let owner_hwnd = windows::Win32::Foundation::HWND::default();
                 if dialog.Show(owner_hwnd).is_ok() {
                     let item = dialog.GetResult().ok()?;
                     let psz = item
                         .GetDisplayName(windows::Win32::UI::Shell::SIGDN_FILESYSPATH)
                         .ok()?;
                     let path_str = psz.to_string().ok()?;
-                    let _ = windows::Win32::System::Com::CoTaskMemFree(Some(psz.0 as *const _));
+                    windows::Win32::System::Com::CoTaskMemFree(Some(psz.0 as *const _));
                     if !path_str.is_empty() {
                         return Some(PathBuf::from(path_str));
                     }
@@ -733,14 +778,15 @@ pub fn pick_save_file(default_dir: &Path, default_filename: &str) -> Option<Path
                     let _ = dialog.SetFolder(&dir_item);
                 }
 
-                let owner_hwnd = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+                // Never attach to active foreground window synchronously to prevent message pump deadlock
+                let owner_hwnd = windows::Win32::Foundation::HWND::default();
                 if dialog.Show(owner_hwnd).is_ok() {
                     let item = dialog.GetResult().ok()?;
                     let psz = item
                         .GetDisplayName(windows::Win32::UI::Shell::SIGDN_FILESYSPATH)
                         .ok()?;
                     let path_str = psz.to_string().ok()?;
-                    let _ = windows::Win32::System::Com::CoTaskMemFree(Some(psz.0 as *const _));
+                    windows::Win32::System::Com::CoTaskMemFree(Some(psz.0 as *const _));
                     if !path_str.is_empty() {
                         return Some(PathBuf::from(path_str));
                     }
@@ -893,13 +939,11 @@ pub fn hook_tab_download(
                             .or_else(dirs::download_dir)
                             .unwrap_or_else(|| PathBuf::from("."));
 
+                        // Option A: Auto-save immediately to downloads directory with unique filename
+                        // Zero UI hang: never block with synchronous dialog or .join() on the STA UI thread
                         let final_dest: PathBuf = if settings.ask_download_location {
-                            if let Some(user_picked) = pick_save_file(&default_dir, &raw_filename) {
-                                user_picked
-                            } else {
-                                let _ = args.SetCancel(true);
-                                return Ok(());
-                            }
+                            pick_save_file(&default_dir, &raw_filename)
+                                .unwrap_or_else(|| resolve_unique_filepath(&default_dir, &raw_filename))
                         } else {
                             resolve_unique_filepath(&default_dir, &raw_filename)
                         };
@@ -918,7 +962,7 @@ pub fn hook_tab_download(
                             NativeDownloadOp(operation.clone()),
                         );
 
-                        // Notify toolbar of start
+                        // Notify toolbar of start (dispatched asynchronously)
                         dl_mgr.notify_start(&app_h, &item, &st_mgr);
 
                         // Hook progress

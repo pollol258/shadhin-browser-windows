@@ -193,6 +193,27 @@ pub async fn create_tab(
         }));
     });
 
+    // Option A: Non-blocking download handling (Fastest & Zero-Hang)
+    let st_dl = state.settings_manager.clone();
+    builder = builder.on_download(move |_wv, event| match event {
+        tauri::webview::DownloadEvent::Requested { destination, .. } => {
+            let settings = st_dl.get();
+            let default_dir = settings
+                .download_dir
+                .as_ref()
+                .map(PathBuf::from)
+                .or_else(dirs::download_dir)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let raw = destination
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("download.bin");
+            *destination = crate::downloads::resolve_unique_filepath(&default_dir, raw);
+            true
+        }
+        _ => true,
+    });
+
     // Page load status update and deferred native hooks
     let app_load = app.clone();
     let tab_id_load = tab_id.clone();
@@ -692,7 +713,7 @@ fn spawn_browser_window(
     let blocker = state.ad_blocker.clone();
 
     // Use WebviewWindowBuilder instead of WindowBuilder + add_child
-    let _win = tauri::WebviewWindowBuilder::new(
+    let win_builder = tauri::WebviewWindowBuilder::new(
         &app,
         &win_label,
         tauri::WebviewUrl::External(url),
@@ -730,9 +751,31 @@ fn spawn_browser_window(
                 ));
             }
         }
-    })
-    .build()
-    .map_err(|e| e.to_string())?;
+    });
+
+    let st_dl_win = state.settings_manager.clone();
+    let win_builder = win_builder.on_download(move |_wv, event| match event {
+        tauri::webview::DownloadEvent::Requested { destination, .. } => {
+            let settings = st_dl_win.get();
+            let default_dir = settings
+                .download_dir
+                .as_ref()
+                .map(PathBuf::from)
+                .or_else(dirs::download_dir)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let raw = destination
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("download.bin");
+            *destination = crate::downloads::resolve_unique_filepath(&default_dir, raw);
+            true
+        }
+        _ => true,
+    });
+
+    let _win = win_builder
+        .build()
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }

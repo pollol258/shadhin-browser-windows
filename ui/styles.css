@@ -367,21 +367,84 @@ html, body {
     color: #ffffff;
     padding: 1px 4px;
     border-radius: 8px;
-    font-weight: 600;
+    font-weight: 700;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    min-width: 14px;
 }
 
 .downloads-btn {
     position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dl-ring {
+    position: absolute;
+    top: -3px;
+    left: -3px;
+    width: 32px;
+    height: 32px;
+    transform: rotate(-90deg);
+    pointer-events: none;
+    display: none;
+}
+
+.dl-ring-bg {
+    fill: none;
+    stroke: rgba(0, 122, 255, 0.2);
+    stroke-width: 2.5;
+}
+
+.dl-ring-progress {
+    fill: none;
+    stroke: var(--accent-blue);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-dasharray: 87.96;
+    stroke-dashoffset: 87.96;
+    transition: stroke-dashoffset 0.25s ease;
+}
+
+.dl-icon {
+    font-size: 14px;
+    display: inline-block;
+    transition: transform 0.2s ease;
+}
+
+.downloads-btn.active .dl-ring {
+    display: block;
+}
+
+.downloads-btn.pulse {
+    animation: dlPulse 0.6s ease-out;
+}
+
+@keyframes dlPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.25); filter: drop-shadow(0 0 6px #34c759); }
+    100% { transform: scale(1); }
 }
 
 .dl-badge {
     position: absolute;
-    top: 2px;
-    right: 2px;
-    width: 6px;
-    height: 6px;
+    top: -4px;
+    right: -6px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
     background-color: var(--accent-blue);
-    border-radius: 50%;
+    color: #fff;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .window-dots {
@@ -485,13 +548,124 @@ html, body {
     to { opacity: 1; transform: scale(1); }
 }
 
+.bookmarks-popover {
+    top: 90px; /* 82px chrome height + 8px gap */
+    left: 14px; /* Aligned under left bookmark icon */
+    width: 320px;
+    max-height: 480px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: popoverIn 0.18s ease forwards;
+}
+
+.bookmarks-popover.hidden {
+    display: none !important;
+}
+
+.bookmarks-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-chrome);
+}
+
+.bookmarks-header h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.bookmarks-list {
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1;
+    min-height: 50px;
+    max-height: 380px;
+}
+
+.bookmark-row {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.bookmark-row:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+    .bookmark-row:hover {
+        background-color: rgba(255, 255, 255, 0.08);
+    }
+}
+
+.bookmark-icon {
+    font-size: 15px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.bookmark-info {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.bookmark-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bookmark-url {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.btn-delete-bookmark {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 16px;
+    line-height: 1;
+    padding: 4px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+
+.bookmark-row:hover .btn-delete-bookmark {
+    opacity: 0.7;
+}
+
+.btn-delete-bookmark:hover {
+    opacity: 1 !important;
+    color: #ff3b30;
+}
+
 .downloads-popover {
     top: 90px; /* 82px chrome height + 8px gap */
     right: 70px;
-    width: 320px;
-    max-height: 400px;
+    width: 380px;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .menu-popover {
@@ -499,6 +673,58 @@ html, body {
     right: 40px;
     width: 240px;
     padding: 6px 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+}
+
+/* Styled Thin Scrollbars for Popovers */
+.menu-popover,
+.downloads-list,
+.bookmarks-list,
+.tracker-popover {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+    .menu-popover,
+    .downloads-list,
+    .bookmarks-list,
+    .tracker-popover {
+        scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+    }
+}
+
+.menu-popover::-webkit-scrollbar,
+.downloads-list::-webkit-scrollbar,
+.bookmarks-list::-webkit-scrollbar,
+.tracker-popover::-webkit-scrollbar {
+    width: 5px;
+}
+
+.menu-popover::-webkit-scrollbar-track,
+.downloads-list::-webkit-scrollbar-track,
+.bookmarks-list::-webkit-scrollbar-track,
+.tracker-popover::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.menu-popover::-webkit-scrollbar-thumb,
+.downloads-list::-webkit-scrollbar-thumb,
+.bookmarks-list::-webkit-scrollbar-thumb,
+.tracker-popover::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .menu-popover::-webkit-scrollbar-thumb,
+    .downloads-list::-webkit-scrollbar-thumb,
+    .bookmarks-list::-webkit-scrollbar-thumb,
+    .tracker-popover::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+    }
 }
 
 .popover-header {
@@ -509,9 +735,282 @@ html, body {
     border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
-.popover-header h4 {
-    font-size: 13px;
+.downloads-header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px 10px 14px;
+    border-bottom: 1px solid var(--border-chrome);
+}
+
+.downloads-header h4 {
+    font-size: 14px;
     font-weight: 600;
+    color: var(--text-primary);
+}
+
+.downloads-search-wrap {
+    position: relative;
+    width: 100%;
+    display: flex;
+    align-items: center;
+}
+
+#downloads-search-input {
+    width: 100%;
+    padding: 6px 28px 6px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--address-border);
+    background-color: var(--address-bg);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+#downloads-search-input:focus {
+    border-color: var(--accent-blue);
+}
+
+.icon-btn-xs {
+    position: absolute;
+    right: 6px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 14px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 2px;
+}
+
+.icon-btn-xs:hover {
+    color: var(--text-primary);
+}
+
+.downloads-list {
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1;
+    min-height: 50px;
+}
+
+.download-group-header {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    padding: 10px 14px 4px 14px;
+    background: transparent;
+}
+
+.download-row {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    transition: background-color 0.15s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+    .download-row {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+}
+
+.download-row:hover {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+@media (prefers-color-scheme: dark) {
+    .download-row:hover {
+        background-color: rgba(255, 255, 255, 0.03);
+    }
+}
+
+.download-file-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    background-color: rgba(0, 122, 255, 0.08);
+    color: var(--accent-blue);
+}
+
+.download-file-icon.app {
+    background-color: rgba(255, 59, 48, 0.1);
+    color: #ff3b30;
+}
+
+.download-file-icon.media {
+    background-color: rgba(175, 82, 222, 0.1);
+    color: #af52de;
+}
+
+.download-file-icon.archive {
+    background-color: rgba(255, 149, 0, 0.1);
+    color: #ff9500;
+}
+
+.download-file-icon.doc {
+    background-color: rgba(52, 199, 89, 0.1);
+    color: #34c759;
+}
+
+.download-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.download-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.download-filename {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.download-filename:hover {
+    text-decoration: underline;
+}
+
+.download-domain {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.download-info {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.download-info.error {
+    color: var(--danger-red);
+}
+
+.download-progress-track {
+    width: 100%;
+    height: 3px;
+    background-color: rgba(0, 0, 0, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 4px 0 2px 0;
+    display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+    .download-progress-track {
+        background-color: rgba(255, 255, 255, 0.12);
+    }
+}
+
+.download-progress-fill {
+    height: 100%;
+    background-color: var(--accent-blue);
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.2s ease;
+}
+
+.download-row.paused .download-progress-fill {
+    background-color: #ff9500;
+}
+
+.download-row.file-deleted {
+    opacity: 0.6;
+}
+
+.download-row.file-deleted .download-filename {
+    text-decoration: line-through;
+    cursor: default;
+}
+
+.download-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.download-action-btn {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background-color: rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+    .download-action-btn {
+        background-color: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+}
+
+.download-action-btn:hover {
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+    .download-action-btn:hover {
+        background-color: rgba(255, 255, 255, 0.15);
+    }
+}
+
+.download-action-btn.primary {
+    background-color: var(--accent-blue);
+    color: #fff;
+    border-color: var(--accent-blue);
+}
+
+.download-action-btn.primary:hover {
+    background-color: #0066d6;
+}
+
+.download-action-btn.danger:hover {
+    color: var(--danger-red);
+}
+
+.downloads-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 14px;
+    border-top: 1px solid var(--border-chrome);
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+@media (prefers-color-scheme: dark) {
+    .downloads-footer {
+        background-color: rgba(255, 255, 255, 0.02);
+    }
 }
 
 .text-btn {
@@ -520,67 +1019,35 @@ html, body {
     color: var(--accent-blue);
     font-size: 12px;
     cursor: pointer;
-}
-
-.downloads-list {
-    overflow-y: auto;
-    max-height: 320px;
-}
-
-.download-row {
-    padding: 10px 14px;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
-    display: flex;
-    flex-direction: column;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
     gap: 4px;
 }
 
-.download-row:last-child {
-    border-bottom: none;
+.text-btn:hover {
+    text-decoration: underline;
 }
 
-.download-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
+.text-btn.danger {
+    color: var(--danger-red);
 }
 
-.download-filename {
-    font-weight: 500;
-    max-width: 180px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.download-status {
-    font-size: 11px;
-    color: var(--text-secondary);
-}
-
-.download-status.completed {
-    color: #34c759;
-}
-
-.download-actions {
+.setting-folder-row {
     display: flex;
     gap: 8px;
-    margin-top: 4px;
+    width: 100%;
 }
 
-.download-action-btn {
-    font-size: 11px;
-    padding: 3px 8px;
-    border-radius: 4px;
-    background-color: rgba(0, 0, 0, 0.06);
-    border: none;
-    color: var(--text-primary);
-    cursor: pointer;
+.setting-folder-row input {
+    flex: 1;
 }
 
-.download-action-btn:hover {
-    background-color: rgba(0, 0, 0, 0.12);
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 12px;
+    white-space: nowrap;
 }
 
 .empty-state {
@@ -840,6 +1307,8 @@ html, body {
     right: 110px;
     width: 250px;
     z-index: 600;
+    overflow-y: auto;
+    overflow-x: hidden;
     transform-origin: top right;
     animation: popoverIn 0.18s ease forwards;
 }
@@ -958,6 +1427,11 @@ html, body {
 /* ==========================================
    Custom Confirm Dialog
    ========================================== */
+
+#confirm-modal {
+    align-items: flex-start;
+    padding-top: 60px;
+}
 
 .confirm-dialog {
     background: var(--chrome-bg, #f5f5f5);

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TabInfo {
     pub id: String,
     pub label: String,
@@ -12,7 +12,7 @@ pub struct TabInfo {
     pub can_go_forward: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TabManager {
     pub tabs: Vec<TabInfo>,
     pub active_tab_id: Option<String>,
@@ -84,5 +84,92 @@ impl TabManager {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_tab(id: &str) -> TabInfo {
+        TabInfo {
+            id: id.to_string(),
+            label: format!("tab_{}", id),
+            title: format!("Tab {}", id),
+            url: format!("https://example.com/{}", id),
+            favicon: None,
+            is_loading: false,
+            can_go_back: false,
+            can_go_forward: false,
+        }
+    }
+
+    #[test]
+    fn test_tab_manager_add_and_active() {
+        let mut mgr = TabManager::new();
+        assert!(mgr.tabs.is_empty());
+        assert_eq!(mgr.get_active_tab(), None);
+
+        mgr.add_tab(dummy_tab("1"));
+        assert_eq!(mgr.tabs.len(), 1);
+        assert_eq!(mgr.active_tab_id, Some("1".to_string()));
+        assert_eq!(mgr.get_active_tab().unwrap().id, "1");
+
+        mgr.add_tab(dummy_tab("2"));
+        assert_eq!(mgr.tabs.len(), 2);
+        assert_eq!(mgr.active_tab_id, Some("2".to_string()));
+        assert_eq!(mgr.get_active_tab().unwrap().id, "2");
+    }
+
+    #[test]
+    fn test_tab_manager_set_active() {
+        let mut mgr = TabManager::new();
+        mgr.add_tab(dummy_tab("1"));
+        mgr.add_tab(dummy_tab("2"));
+
+        assert!(mgr.set_active("1"));
+        assert_eq!(mgr.active_tab_id, Some("1".to_string()));
+
+        // Invalid tab id returns false
+        assert!(!mgr.set_active("999"));
+        assert_eq!(mgr.active_tab_id, Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_tab_manager_remove_non_active() {
+        let mut mgr = TabManager::new();
+        mgr.add_tab(dummy_tab("1"));
+        mgr.add_tab(dummy_tab("2"));
+        mgr.add_tab(dummy_tab("3"));
+        mgr.set_active("1");
+
+        // Remove tab "2" while "1" is active
+        let removed = mgr.remove_tab("2");
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, "2");
+        assert_eq!(mgr.tabs.len(), 2);
+        assert_eq!(mgr.active_tab_id, Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_tab_manager_remove_active_fallback() {
+        let mut mgr = TabManager::new();
+        mgr.add_tab(dummy_tab("1"));
+        mgr.add_tab(dummy_tab("2"));
+        mgr.add_tab(dummy_tab("3"));
+        mgr.set_active("2");
+
+        // Removing active tab at index 1 -> next tab ("3") becomes active
+        mgr.remove_tab("2");
+        assert_eq!(mgr.active_tab_id, Some("3".to_string()));
+
+        // Removing active tab at end ("3") -> previous tab ("1") becomes active
+        mgr.remove_tab("3");
+        assert_eq!(mgr.active_tab_id, Some("1".to_string()));
+
+        // Removing last remaining tab -> active_tab_id becomes None
+        mgr.remove_tab("1");
+        assert_eq!(mgr.active_tab_id, None);
+        assert!(mgr.tabs.is_empty());
     }
 }

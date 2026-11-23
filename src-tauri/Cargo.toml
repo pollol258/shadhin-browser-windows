@@ -1,8 +1,10 @@
 [package]
 name = "shadhin-browser"
-version = "0.1.0"
+version = "1.1.0"
 description = "Shadhin-Browser - Privacy-focused Desktop Browser"
 edition = "2021"
+authors = ["Md. Ziaur Rahman <zia.r@aol.com>"]
+license = "GPL-3.0-or-later"
 
 [lib]
 name = "shadhin_browser_lib"
@@ -25,10 +27,13 @@ base64 = "0.23"
 url = "2"
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "0.39.1"
+windows-core = "0.62"
 windows = { version = "0.58", features = [
     "Win32_Security_Cryptography",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_System_Memory",
+    "Win32_System_Com",
 ] }

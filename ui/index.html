@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Shadhin-Browser</title>
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+    <link rel="alternate icon" href="icon.png">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body class="safari-ui-body">
@@ -43,8 +45,12 @@
                 </button>
 
                 <!-- Downloads Button -->
-                <button class="icon-btn downloads-btn" id="btn-downloads" title="Downloads">
-                    &#11015;
+                <button class="icon-btn downloads-btn" id="btn-downloads" title="Downloads (Ctrl+J)">
+                    <svg class="dl-ring" id="dl-ring" viewBox="0 0 36 36">
+                        <circle class="dl-ring-bg" cx="18" cy="18" r="14"></circle>
+                        <circle class="dl-ring-progress" id="dl-ring-progress" cx="18" cy="18" r="14"></circle>
+                    </svg>
+                    <span class="dl-icon" id="dl-icon">&#11015;</span>
                     <span class="dl-badge" id="dl-badge" style="display: none;"></span>
                 </button>
 
@@ -53,8 +59,8 @@
 
                 <!-- Windows Traffic-Light Dots (Minimize, Maximize, Close) -->
                 <div class="window-dots">
-                    <span class="dot green" id="dot-green" title="Maximize / Restore"></span>
                     <span class="dot yellow" id="dot-yellow" title="Minimize"></span>
+                    <span class="dot green" id="dot-green" title="Maximize / Restore"></span>
                     <span class="dot red" id="dot-red" title="Close"></span>
                 </div>
             </div>
@@ -122,14 +128,34 @@
         </div>
     </div>
 
+    <!-- Bookmarks Popover Panel -->
+    <div class="popover-panel bookmarks-popover hidden" id="bookmarks-panel" style="display: none;" role="dialog" aria-label="Bookmarks">
+        <div class="popover-header bookmarks-header">
+            <h4>Bookmarks</h4>
+            <button class="btn btn-primary btn-sm" id="btn-add-current-bookmark" title="Bookmark current active tab">+ Add Current Tab</button>
+        </div>
+        <div class="popover-body bookmarks-list" id="bookmarks-list">
+            <div class="empty-state" id="bookmarks-empty-state">No bookmarks saved yet</div>
+        </div>
+    </div>
+
     <!-- Downloads Popover Panel -->
     <div class="popover-panel downloads-popover" id="downloads-panel" style="display: none;">
-        <div class="popover-header">
+        <div class="popover-header downloads-header">
             <h4>Downloads</h4>
-            <button class="text-btn" id="btn-clear-downloads">Clear All</button>
+            <div class="downloads-search-wrap">
+                <input type="text" id="downloads-search-input" placeholder="Search downloads..." autocomplete="off">
+                <button class="icon-btn-xs" id="btn-clear-search" style="display:none;" title="Clear search">&times;</button>
+            </div>
         </div>
         <div class="popover-body downloads-list" id="downloads-list">
-            <div class="empty-state">No recent downloads</div>
+            <div class="empty-state" id="downloads-empty-state">No recent downloads</div>
+        </div>
+        <div class="downloads-footer">
+            <button class="text-btn" id="btn-open-downloads-folder" title="Open Downloads Folder">
+                <span class="btn-icon">&#128194;</span> Open Folder
+            </button>
+            <button class="text-btn danger" id="btn-clear-downloads" title="Clear completed downloads from list">Clear All</button>
         </div>
     </div>
 
@@ -195,8 +221,29 @@
                         <input type="text" id="setting-homepage" placeholder="https://duckduckgo.com">
                     </div>
                     <div class="setting-row">
-                        <label for="setting-download-dir">Downloads Folder</label>
-                        <input type="text" id="setting-download-dir" placeholder="Default Downloads folder">
+                        <label for="setting-download-dir">Downloads Location</label>
+                        <div class="setting-folder-row">
+                            <input type="text" id="setting-download-dir" placeholder="Default Downloads folder" readonly>
+                            <button class="btn btn-secondary btn-sm" id="btn-browse-download-dir" type="button">Browse...</button>
+                        </div>
+                    </div>
+                    <div class="setting-toggle-row">
+                        <label>
+                            <input type="checkbox" id="setting-ask-location">
+                            <span>Always ask where to save each file before downloading</span>
+                        </label>
+                    </div>
+                    <div class="setting-toggle-row">
+                        <label>
+                            <input type="checkbox" id="setting-auto-open-downloads">
+                            <span>Open downloads panel automatically when downloads start or finish</span>
+                        </label>
+                    </div>
+                    <div class="setting-toggle-row">
+                        <label>
+                            <input type="checkbox" id="setting-download-notification">
+                            <span>Show notification when a download completes</span>
+                        </label>
                     </div>
                 </div>
 
@@ -266,8 +313,9 @@
                 <button class="modal-close-btn" id="btn-close-about">&times;</button>
             </div>
             <div class="modal-body text-center">
+                <img src="icon.svg" alt="Shadhin-Browser" width="80" height="80" style="margin-bottom: 12px; border-radius: 18px; box-shadow: 0 8px 24px rgba(0,71,53,0.35);">
                 <h2>Shadhin-Browser</h2>
-                <p class="about-version">Version 1.0.0 (Windows x64)</p>
+                <p class="about-version">Version 1.1.0 (Windows x64)</p>
                 <p class="about-desc">
                     A fast, privacy-first desktop web browser built with Tauri 2, Rust, and WebView2.
                     Features built-in ad/tracker blocking, Windows DPAPI hardware-backed password security,

@@ -41,18 +41,14 @@ Shadhin-Browser uses Tauri 2's **Multi-Webview Child Architecture**:
 ```
 
 ### 2.1. The Critical Multi-Webview Bounds Constraint & Fix
-- **Constraint:** In Tauri 2 / WebView2, a child webview physically clips all HTML content outside its bounding rectangle. The chrome toolbar webview is physically positioned at `(0.0, 0.0)` with a default height of `82.0px` (`TOOLBAR_HEIGHT`). Any popover or modal rendered at `top: 90px` or full screen is clipped and 100% invisible.
-- **The Solution (Dynamic Toolbar Expansion):**
-  1. The toolbar webview is instantiated with `.transparent(true)` in [lib.rs](file:///d:/MyProject/pollol258/src-tauri/src/lib.rs), and `html, body` has `background: transparent;`.
-  2. When any overlay opens, the frontend calls `set_toolbar_expanded(expanded: true, height: Option<f64>)`.
-     - Downloads Popover: Expands to `480px`.
-     - Safari Menu: Expands to `360px`.
-     - Tracker Protection Popover: Expands to `340px`.
-     - Settings / About Modal: Expands to full window height (`null`).
-     - Custom Confirm Dialog: Expands to `260px`.
-     - Password Save Banner: Expands to `220px`.
-  3. Because everything outside the 82px chrome header is completely transparent, the popover card floats seamlessly over the underlying web page.
-  4. When closed, outside-clicked, or when `Esc` is pressed, `collapseToolbar()` immediately resets the toolbar height back to `TOOLBAR_HEIGHT = 82.0px`.
+- **Constraint:** In Tauri 2 / WebView2, a child webview physically clips all HTML content outside its bounding rectangle. The chrome toolbar webview is physically positioned at `(0.0, 0.0)` with a default height of `82.0px` (`TOOLBAR_HEIGHT`). Any popover or modal rendered at `top: 90px` or full screen is clipped and 100% invisible if the toolbar webview remains at 82px.
+- **The Solution (Dynamic Toolbar Expansion & Content Measurement):**
+  1. The toolbar webview is instantiated with `.transparent(true)` in [lib.rs](file:///d:/MyProject/pollol258/src-tauri/src/lib.rs), and `html, body` has `background: transparent;`. On expansion, the Win32 HWND of the toolbar is brought to `HWND_TOP` to guarantee popover clicks are not stolen by the underlying tab.
+  2. **Dynamic Measurement (No Hard-Coded Heights):** When any popover or overlay opens (Safari menu, downloads panel, tracker protection popover, confirm dialog, password save banner), `measureAndExpand(element)` measures the real rendered content height (`topOffset + scrollHeight + 16px bottom margin`) via `requestAnimationFrame` after layout.
+  3. **Window Height Capping & Thin Scrollbars:** Popovers are capped at `Math.max(120, _mainWindowHeight - topOffset - 16)`. If content is taller than available window height, `overflow-y: auto` with custom styled thin scrollbars (`5px`, theme-aware) ensures all items remain reachable.
+  4. **Dynamic Resizing with Progress Tick Immunity:** A throttled `ResizeObserver` (50ms) and `syncActiveOverlayHeight()` track dynamic changes (e.g. downloads list growing, shrinking, or filtered by search) and update the toolbar height only when the measured target height changes by > 2px. Rapid download progress ticks (~4Hz) do not alter row height and thus incur zero IPC overhead or flicker.
+  5. Full-window overlays (Settings modal, About modal) call `expandToolbar(null)` to expand to 100% of the window height with translucent backdrop.
+  6. When all popovers/modals close (via Esc, outside click, or toggle), `collapseToolbar()` immediately resets the toolbar height back to `TOOLBAR_HEIGHT = 82.0px`.
 
 ---
 
@@ -68,7 +64,7 @@ D:\MyProject\pollol258/
 │   │   ├── blocker.rs                 # EasyList-lite network blocker & atomic counter
 │   │   ├── downloads.rs               # Download manager & persistent JSON history
 │   │   ├── passwords.rs               # Windows DPAPI hardware-bound password vault
-│   │   ├── settings.rs                # User settings (search engine, homepage, adblock flags)
+│   │   ├── settings.rs                # User settings (search engine, homepage, download dir, ask location, notifications, adblock flags)
 │   │   ├── fullscreen.rs              # HTML5 fullscreen state tracking
 │   │   └── browser/
 │   │       ├── mod.rs                 # PAGE_INJECTION_SCRIPT & toolbar height constants
@@ -94,7 +90,7 @@ D:\MyProject\pollol258/
 ### 4.1. Tab Management (`tabs.rs`, `commands.rs`, `main.js`)
 - **Backend:** `TabManager` holds a `Vec<TabInfo>` and `active_tab_id: Option<String>`.
 - **Lifecycle:**
-  - `create_tab(url)`: Hides the currently active tab webview, instantiates a new child webview with `PAGE_INJECTION_SCRIPT`, sets its size to `(width, logical_height - 82.0)`, attaches it, and emits `"tab-created"` and `"tab-switched"`.
+  - `create_tab(url)`: Rate-limited with 120ms cooldown guard (`last_create_tab`). Hides the currently active tab webview, registers `TabInfo` into `TabManager` *before* child webview creation, instantiates the child webview, re-raises the toolbar HWND (`HWND_TOP`) so toolbar clicks are never eaten by the new child webview, and defers native WebView2 hooks (`hook_tab_download`, `hook_tab_blocker`, `hook_tab_fullscreen`) to the tab's first `PageLoadEvent::Started` event via an atomic guard to prevent main-thread deadlocks during initialization. Emits `"tab-created"` and `"tab-switched"`.
   - `switch_tab(tab_id)`: Resizes target tab, calls `wv.show()`, and hides all other tabs.
   - `close_tab(tab_id)`: Destroys webview, switches to adjacent tab. If empty, automatically spawns a fresh homepage tab.
 - **Frontend Tab Strip:**
@@ -137,6 +133,10 @@ Shortcuts must work even when keyboard focus is inside a third-party webpage or 
    - `Ctrl + End`: Last tab
    - `Ctrl + J`: Toggle downloads panel
    - `Ctrl + ,`: Open settings
+4. **In-Page Link Context Menu & Modifier Navigation (`PAGE_INJECTION_SCRIPT`):**
+   - Intercepts link right-clicks (`contextmenu` on `<a>`) with a theme-aware Shadow-DOM Safari-style context menu ("Open Link in New Tab", "Open Link in New Window", "Open Link in Private Window", "Copy Link Address").
+   - Forwards commands via `sendAction()` to `handle_injected_action()`, spawning either tabs (`create_tab`) or separate OS windows (`spawn_browser_window`).
+   - Modifier shortcuts: `Ctrl/Cmd + Click` and middle-click open link in new tab; `Shift + Click` opens in a new OS window. Target `_blank` links default to tabs via `on_new_window`.
    - `Ctrl + B`: Bookmarks toast
    - `Esc`: Stop loading / close all active popovers
 
@@ -168,16 +168,34 @@ Shortcuts must work even when keyboard focus is inside a third-party webpage or 
     `tb.eval("if (window.__onTrackerBlocked) { window.__onTrackerBlocked(count); }")`
   - Immediately updates `#adblock-badge` and `#tracker-popover-count` with 0ms IPC latency.
 
-### 4.7. Download Manager (`downloads.rs`, `commands.rs`, `main.js`)
-- **WebView2 `on_download` Interception:**
-  - `Requested { url, destination }`:
-    - **Safe Filename Resolution:** WebView2 often passes an empty `destination`. Shadhin-Browser extracts the filename from `destination.file_name()`, or parses the last segment of `url.path_segments()`, sanitizes Windows-forbidden characters (`\ / : * ? " < > |`), and sets `*destination = target_dir.join(&safe_fname)`.
-    - Emits `"download-started"` and calls `tb.eval("window.__onDownloadStarted(...)")`.
-  - `Finished { url, success }`:
-    - Locates the active download item (with fallback for redirected URLs), updates status to `"completed"` or `"failed"`, and calls `tb.eval("window.__onDownloadFinished(...)")`.
-    - Persists history in `%LOCALAPPDATA%\Shadhin-Browser\downloads.json`.
-- **Auto-Open UX:** Upon download completion, `ui/main.js` automatically pops open `#downloads-panel`, displaying the filename, status, and **"Open File"** / **"Show in Folder"** buttons.
-- **`target="_blank"` Rewrite:** In `PAGE_INJECTION_SCRIPT`, any link click with `target="_blank"` pointing to downloadable extensions (`.zip`, `.exe`, `.pdf`, `.apk`, `.iso`, etc.) is rewritten to `target="_self"` so downloads don't get lost in unhandled popup tabs.
+### 4.7. Safari/Chrome-Grade Download Manager (`downloads.rs`, `commands.rs`, `main.js`)
+- **Native WebView2 COM Operation Hooking:**
+  - Hooked via `with_webview` and `ICoreWebView2_4::add_DownloadStarting` using `webview2-com` crate (avoiding wry's basic `on_download` to eliminate conflicting handlers).
+  - Listens to native `ICoreWebView2DownloadOperation::add_BytesReceivedChanged` and `add_StateChanged` events.
+  - Exposes bytes received, total bytes, pause, resume, cancel, and interrupt reasons (`COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON`).
+- **Download Item Model & Tracking:**
+  - Tracked by unique UUID `id` (never by URL).
+  - Fields: `id`, `url`, `source_domain`, `filename`, `save_path`, `total_bytes`, `received_bytes`, `state` (`in_progress`, `paused`, `completed`, `failed`, `cancelled`, `interrupted`), `error_reason`, `started_at`, `finished_at`, `mime_type`.
+- **Live Progress & Speed Calculation:**
+  - Event-driven (no polling loops).
+  - Exponential smoothed moving average for speed (bytes/sec) and estimated time remaining (ETA).
+  - Updates throttled to 4 updates/sec (250ms) per download, dispatched via direct `tb.eval("window.__onDownloadProgress(...)")`.
+- **Filename Sanitization & Collision Resolution:**
+  - Sanitizes forbidden characters (`\ / : * ? " < > |`), ASCII controls, trailing spaces, and trailing dots.
+  - Guards against reserved Windows device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`..`COM9`, `LPT1`..`LPT9`).
+  - Auto-increments collision names: `filename (1).ext`, `filename (2).ext` if target file already exists on disk.
+- **Atomic Persistence:**
+  - Saved in `%LOCALAPPDATA%\Shadhin-Browser\downloads.json` with atomic write (temp file then atomic rename).
+  - Capped at 500 entries.
+  - Startup migration: any item left `in_progress` or `paused` on application start is migrated to `interrupted` with Retry capability.
+- **Session-Preserving Retry:**
+  - Triggers retry download from stored URL inside the active tab context (`<a>` element click in tab webview), ensuring session cookies, referrers, and authenticated sessions are completely preserved.
+- **Frontend Safari-Style Experience:**
+  - **Toolbar Button:** Aggregate circular progress ring (`#dl-ring`) around download button, active downloads badge count, and completion pulse animation.
+  - **Downloads Popover:** Search/filter box, grouping by Active / Today / Yesterday / Earlier, file-type icons (.exe, .zip, .media, .doc), live progress bar, formatted speed & ETA, action buttons (Pause, Resume, Cancel, Retry, Open File, Show in Folder, Copy Link, Remove).
+  - **Safety Checks:** Executable warning confirmation modal before launching `.exe`, `.msi`, `.bat`, `.cmd`, `.ps1`, `.scr`, `.vbs`, `.jar`.
+  - **Ghost State:** Detects moved or deleted files via `check_download_file_exists` and renders muted row with Retry and Remove only.
+  - **Settings Controls:** Folder picker (`pick_download_folder`), "Ask where to save each file", "Auto-open downloads panel", and "Show notification when complete".
 
 ### 4.8. Password Manager (Windows DPAPI Vault)
 - **Encryption:** Uses native Windows DPAPI (`CryptProtectData` and `CryptUnprotectData` from `windows::Win32::Security::Cryptography`).
@@ -213,6 +231,15 @@ Shortcuts must work even when keyboard focus is inside a third-party webpage or 
 | `open_download_file` | `path: String` | `Result<(), String>` | Opens file with default system application |
 | `open_download_folder` | `path: String` | `Result<(), String>` | Opens Windows File Explorer highlighting file |
 | `clear_downloads` | None | `Result<(), String>` | Clears download history |
+| `pause_download` | `id: String` | `Result<(), String>` | Pauses an active download operation via WebView2 COM |
+| `resume_download` | `id: String` | `Result<(), String>` | Resumes a paused download operation |
+| `cancel_download` | `id: String` | `Result<(), String>` | Cancels an ongoing download |
+| `retry_download` | `id: String` | `Result<(), String>` | Re-initiates download in tab preserving cookies & auth |
+| `remove_download` | `id: String` | `Result<(), String>` | Removes download entry from persistent list |
+| `delete_download_file` | `id: String` | `Result<(), String>` | Deletes downloaded file from disk and removes entry |
+| `pick_download_folder` | None | `Result<Option<String>, String>` | Opens native Windows folder picker dialog |
+| `open_downloads_folder` | None | `Result<(), String>` | Opens configured/default downloads folder in Explorer |
+| `check_download_file_exists` | `id: String` | `Result<bool, String>` | Checks if downloaded file still exists on disk |
 | `get_settings` | None | `Result<AppSettings, String>` | Loads user settings |
 | `save_settings` | `settings: AppSettings` | `Result<(), String>` | Saves updated settings |
 | `get_passwords` | None | `Result<Vec<PasswordEntryView>, String>` | Gets DPAPI-stored passwords (masked) |
@@ -259,7 +286,7 @@ D:\MyProject\pollol258\src-tauri\target\release\bundle\msi\Shadhin-Browser_1.0.0
 
 ## 7. Guidelines for AI Agents Modifying This Project
 
-1. **Do NOT break Multi-Webview Bounds:** Any new popover or modal added to `ui/index.html` MUST call `expandToolbar(height)` upon opening and `checkAndCollapseToolbar()` upon closing.
+1. **Do NOT break Multi-Webview Bounds with Hard-Coded Heights:** Any new popover or modal added to `ui/index.html` MUST use dynamic measurement (`measureAndExpand(element)` for floating popovers, or `expandToolbar(null)` for full-window modals) instead of hard-coded fixed heights. Ensure scroll containers have `overflow-y: auto`, styled thin scrollbars, and always call `checkAndCollapseToolbar()` upon closing.
 2. **Preserve Dual-Layer Interception:** When adding new keyboard shortcuts or page-level actions, register them in `PAGE_INJECTION_SCRIPT` using `sendAction('<action>')`, handle them in `commands.rs::handle_injected_action()`, and handle fallback in `ui/main.js`.
 3. **Use Direct `tb.eval` for Critical UI Notifications:** Do not rely solely on `app.emit()` across webviews; call `tb.eval("window.__onEvent(...)")` on `"toolbar"` for guaranteed 0ms response time.
 4. **Maintain Windows Native APIs:** Keep DPAPI (`CryptProtectData`) for credentials and `explorer.exe /select,<path>` for downloads.

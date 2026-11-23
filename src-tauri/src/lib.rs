@@ -1,4 +1,5 @@
 pub mod blocker;
+pub mod bookmarks;
 pub mod browser;
 pub mod commands;
 pub mod downloads;
@@ -8,7 +9,7 @@ pub mod settings;
 
 use std::sync::{Arc, Mutex};
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, WebviewBuilder, WebviewUrl, WindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewBuilder, WebviewUrl, WindowBuilder,
 };
 
 use crate::blocker::AdBlocker;
@@ -33,9 +34,12 @@ pub fn run() {
 
     let password_manager = Arc::new(PasswordManager::new(app_data_dir.clone()));
     let download_manager = Arc::new(DownloadManager::new(app_data_dir.clone()));
+    let bookmark_manager = Arc::new(crate::bookmarks::BookmarkManager::new(app_data_dir.clone()));
     let ad_blocker = Arc::new(AdBlocker::new(settings.ad_block_enabled));
     let fullscreen_manager = Arc::new(FullscreenManager::new());
     let tab_manager = Arc::new(Mutex::new(TabManager::new()));
+    let toolbar_expanded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let last_create_tab = Arc::new(Mutex::new(None));
 
     let app_state = AppState {
         tab_manager,
@@ -43,7 +47,10 @@ pub fn run() {
         password_manager,
         download_manager,
         ad_blocker,
+        bookmark_manager,
         fullscreen_manager,
+        toolbar_expanded,
+        last_create_tab,
         app_data_dir,
     };
 
@@ -68,7 +75,16 @@ pub fn run() {
             commands::get_downloads,
             commands::open_download_file,
             commands::open_download_folder,
+            commands::open_downloads_folder,
+            commands::pick_download_folder,
             commands::clear_downloads,
+            commands::pause_download,
+            commands::resume_download,
+            commands::cancel_download,
+            commands::retry_download,
+            commands::remove_download,
+            commands::delete_download_file,
+            commands::check_download_file_exists,
             commands::get_settings,
             commands::save_settings,
             commands::get_passwords,
@@ -80,11 +96,18 @@ pub fn run() {
             commands::toggle_adblock,
             commands::toggle_ad_blocker,
             commands::get_blocked_count,
+            commands::tracker_blocked_dom,
             commands::on_login_submitted,
             commands::on_fullscreen_element_changed,
             commands::focus_address_bar,
             commands::set_toolbar_expanded,
+            commands::get_window_size,
+            commands::log_frontend,
             commands::toggle_devtools,
+            commands::get_bookmarks,
+            commands::save_bookmark,
+            commands::delete_bookmark,
+            commands::is_bookmarked,
         ])
         .setup(|app| {
             let initial_width = 1200.0;
@@ -102,8 +125,7 @@ pub fn run() {
 
             // Create top toolbar webview (Safari UI)
             let toolbar_builder = WebviewBuilder::new("toolbar", WebviewUrl::App("index.html".into()))
-                .transparent(true)
-                .auto_resize();
+                .transparent(true);
 
             let _toolbar = window.add_child(
                 toolbar_builder,
@@ -123,14 +145,35 @@ pub fn run() {
                     let height = physical_size.height as f64 / scale;
                     let content_height = (height - TOOLBAR_HEIGHT).max(10.0);
 
-                    // Resize toolbar webview width
-                    if let Some(tb) = app_handle_for_resize.get_webview("toolbar") {
-                        let _ = tb.set_size(LogicalSize::new(width, TOOLBAR_HEIGHT));
-                    }
-
-                    // Resize active tab webview
                     let state = app_handle_for_resize.state::<AppState>();
-                    if !state.fullscreen_manager.is_fullscreen() {
+                    let is_fs = state.fullscreen_manager.is_fullscreen();
+
+                    if is_fs {
+                        // In fullscreen mode: keep toolbar hidden (never collapse bounds to 0x0)
+                        if let Some(tb) = app_handle_for_resize.get_webview("toolbar") {
+                            let _ = tb.hide();
+                        }
+                        // Resize active tab webview to full window (0.0, 0.0, width, height)
+                        let active_label = {
+                            let mgr = state.tab_manager.lock().unwrap();
+                            mgr.get_active_tab().map(|t| t.label.clone())
+                        };
+                        if let Some(lbl) = active_label {
+                            if let Some(wv) = app_handle_for_resize.get_webview(&lbl) {
+                                let _ = wv.set_position(LogicalPosition::new(0.0, 0.0));
+                                let _ = wv.set_size(LogicalSize::new(width, height));
+                                let _ = wv.show();
+                            }
+                        }
+                    } else {
+                        // Normal mode: toolbar visible at top
+                        if let Some(tb) = app_handle_for_resize.get_webview("toolbar") {
+                            let _ = tb.set_position(LogicalPosition::new(0.0, 0.0));
+                            let _ = tb.set_size(LogicalSize::new(width, TOOLBAR_HEIGHT));
+                            let _ = tb.show();
+                        }
+
+                        // Resize active tab webview below toolbar
                         let active_label = {
                             let mgr = state.tab_manager.lock().unwrap();
                             mgr.get_active_tab().map(|t| t.label.clone())
@@ -139,9 +182,12 @@ pub fn run() {
                             if let Some(wv) = app_handle_for_resize.get_webview(&lbl) {
                                 let _ = wv.set_position(LogicalPosition::new(0.0, TOOLBAR_HEIGHT));
                                 let _ = wv.set_size(LogicalSize::new(width, content_height));
+                                let _ = wv.show();
                             }
                         }
                     }
+
+                    let _ = app_handle_for_resize.emit("window-resized", serde_json::json!({ "width": width, "height": height }));
                 }
             });
 
@@ -149,8 +195,7 @@ pub fn run() {
             let app_clone = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                let state = app_clone.state::<AppState>();
-                let _ = commands::create_tab(app_clone.clone(), state, None).await;
+                let _ = commands::create_tab(app_clone.clone(), None).await;
             });
 
             Ok(())

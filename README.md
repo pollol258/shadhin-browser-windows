@@ -1,24 +1,35 @@
-# Shadhin-Browser (স্বাধীন ব্রাউজার)
-### Production-Quality Windows Desktop Browser Built with Tauri 2 + Rust + WebView2
+# Shadhin-Browser (Windows Edition)
+### Production-Quality Windows Desktop Browser Built with Rust, Tauri v2 & WebView2
 
 ---
 
 ## 🌟 Overview
 
-**Shadhin-Browser** is a fast, memory-efficient, privacy-first desktop web browser for Windows 10/11. It combines a native **Apple Safari-inspired frameless header** with an isolated **multi-webview child architecture** powered by Microsoft WebView2 and Rust.
+**Shadhin Browser (Windows Edition)** is a fast, memory-efficient, and privacy-first desktop web browser for Windows 10 and 11. It pairs an Apple Safari-inspired frameless header with an isolated multi-webview child architecture powered by Microsoft WebView2 and Rust.
 
-All sensitive data (saved website logins) is encrypted with hardware/OS-bound **Windows DPAPI** (`CryptProtectData`), and built-in network filtering blocks trackers and ads without third-party extensions.
+---
+
+## 🚀 Key Features
+
+- **Brave Adblock & EasyList Integration**: Native web-resource interception that filters and terminates ad and tracker requests before they hit the network.
+- **Privacy Shield & Anti-Fingerprinting**: Comprehensive fingerprinting mitigation, WebRTC leak protection, and zero telemetry.
+- **Live Tracking Counter**: Real-time counter in the toolbar displaying blocked trackers and ads per session and per page.
+- **Hardware-Backed DPAPI Password Vault**: Saved credentials encrypted using Windows DPAPI (`CryptProtectData`), bound to your Windows user session and TPM/hardware.
+- **Full Bookmarks Manager**: Native JSON-backed bookmark storage (`bookmarks.rs`) with quick toolbar access and folder organization.
+- **Multi-Window Support & Tab Tear-Off**: Detach tabs into isolated native windows or open links directly in new windows and private browsing windows with isolated profiles.
+- **Integrated Download Manager**: Real-time download progress, custom save dialogs, and persistent download history.
+- **HTML5 Fullscreen Support**: Smooth transition handling for YouTube, Netflix, Facebook video players, and web apps.
 
 ---
 
 ## 🏗️ Architecture
 
-Shadhin-Browser uses Tauri 2's native **Multi-Webview Child Architecture**:
+Shadhin Browser uses Tauri 2's native **Multi-Webview Child Architecture**:
 
 ```mermaid
 graph TD
     subgraph Host Window ["Main Window (Frameless, decorations: false, Windows 10/11)"]
-        TB["Toolbar Webview (Safari UI, y: 0, height: 82px)<br/>- Safari Tab Strip (Active Tabs, Add +)<br/>- Back / Forward / Bookmark<br/>- Center Address Group + Security Lock + Progress<br/>- Downloads, Menu, Traffic Lights (Min/Max/Close)"]
+        TB["Toolbar Webview (Safari UI, y: 0, height: 82px)<br/>- Tab Strip & Tab Management<br/>- Navigation & Address Group<br/>- Shield Counter, Bookmarks, Downloads"]
         
         subgraph Content Area ["Content Child Webviews (y: 82px, height: window_height - 82px)"]
             T1["Tab 1 Webview2 (Active, Visible)<br/>Isolated Session / WebView2 Engine"]
@@ -28,26 +39,19 @@ graph TD
     end
 
     subgraph Rust Core Backend ["Rust Backend (Tauri 2 Core)"]
-        TM["Tab Manager<br/>tabs.rs / navigation.rs"]
-        DM["Download Manager<br/>downloads.rs / Shell API"]
-        PM["DPAPI Vault<br/>passwords.rs (CryptProtectData)"]
-        AB["Tracker & Ad Blocker<br/>blocker.rs (Hosts + EasyList)"]
-        FS["HTML5 Fullscreen Manager<br/>fullscreen.rs"]
-        SM["Settings Manager<br/>settings.rs"]
+        TM["Tab Manager (tabs.rs / navigation.rs)"]
+        DM["Download Manager (downloads.rs)"]
+        BM["Bookmarks Manager (bookmarks.rs)"]
+        PM["DPAPI Vault (passwords.rs)"]
+        AB["Privacy Shield & Adblocker (blocker.rs)"]
+        FS["HTML5 Fullscreen Manager (fullscreen.rs)"]
+        SM["Settings Manager (settings.rs)"]
     end
 
     TB -->|Tauri IPC Commands| Rust Core Backend
-    Rust Core Backend -->|Tauri Events (tab-updated, download-started, etc.)| TB
-    T1 -.->|Injected JS / IPC (Logins, Fullscreen, Shortcuts)| Rust Core Backend
+    Rust Core Backend -->|Tauri Events| TB
+    T1 -.->|Injected JS / IPC Actions| Rust Core Backend
 ```
-
-### Component Details
-1. **One Main Window (`main`)**: A frameless native window (`decorations: false`, `shadow: true`, `resizable: true`).
-2. **Top Chrome (`toolbar`)**: An internal HTML/CSS/JS webview loaded from `ui/index.html` taking the top 82px. It renders the exact Safari macOS-style controls with dynamic tabs. Elements use `data-tauri-drag-region` for smooth window movement.
-3. **Tab Manager (`tabs.rs`)**: Each tab is an isolated child `WebView2` attached via `window.add_child`. Inactive tabs are hidden (`webview.hide()`), and the active tab is shown and sized to fill the content area.
-4. **Hardware-Backed Password Vault (`passwords.rs`)**: Encrypts and decrypts credentials using **Windows DPAPI** (`CryptProtectData` and `CryptUnprotectData`). Encrypted blobs cannot be decrypted on other user accounts or machines.
-5. **Built-in Ad & Tracker Blocker (`blocker.rs`)**: Intercepts web resource requests using `on_web_resource_request` before they hit the network, terminating connections to known advertising and telemetry domains with `403 Forbidden`.
-6. **Download Manager (`downloads.rs`)**: Intercepts native WebView2 downloads, manages destinations, emits live events to the UI, and persists records in `%APPDATA%\Shadhin-Browser\downloads.json`.
 
 ---
 
@@ -56,9 +60,10 @@ graph TD
 ```text
 pollol258/
 ├── ui/                                # Clean, vanilla frontend (Zero Node dependencies)
-│   ├── index.html                     # Exact Safari chrome layout (tabs, address, traffic lights, modals)
-│   ├── styles.css                     # Apple Safari macOS styling + Dark mode support
-│   └── main.js                        # UI logic, event listeners, Tauri IPC wrappers
+│   ├── index.html                     # Safari-inspired chrome layout
+│   ├── styles.css                     # Apple Safari styling + Dark mode support
+│   ├── main.js                        # UI logic, event listeners, Tauri IPC wrappers
+│   └── newtab.html                    # Native speed-dial / new tab page
 │
 └── src-tauri/                         # Rust Backend (Tauri 2.x)
     ├── Cargo.toml                     # Rust dependencies (tauri 2, windows 0.58, tokio, etc.)
@@ -71,10 +76,11 @@ pollol258/
         ├── main.rs                    # Application entry point
         ├── lib.rs                     # Runtime setup, window creation, child webview layout
         ├── commands.rs                # Tauri IPC commands & shared app state
+        ├── bookmarks.rs               # Bookmarks manager
         ├── downloads.rs               # Download manager (events, shell open, persistence)
         ├── passwords.rs               # Windows DPAPI encryption & credentials vault
-        ├── blocker.rs                 # Tracker & Ad blocker filter (Hosts & EasyList-lite)
-        ├── fullscreen.rs              # HTML5 fullscreen listener (YouTube, Facebook, Netflix)
+        ├── blocker.rs                 # Tracker & Ad blocker filter (Brave/EasyList)
+        ├── fullscreen.rs              # HTML5 fullscreen listener
         ├── settings.rs                # User preferences persistence
         └── browser/
             ├── mod.rs                 # Webview injection scripts (forms, shortcuts, fullscreen)
@@ -84,40 +90,37 @@ pollol258/
 
 ---
 
-## 🚀 Step-by-Step Run Instructions
+## 🛠️ Build & Development Instructions
 
-### 1. Prerequisites
+### Prerequisites
 - **Windows 10 or 11 (64-bit)**
-- **Rust Toolchain (stable)**: `rustc`, `cargo`
-- **Microsoft Edge WebView2 Runtime**: Pre-installed on all Windows 10/11 systems. (If missing, install the [WebView2 Evergreen Bootstrapper](https://go.microsoft.com/fwlink/p/?LinkId=2124703)).
+- **Rust Toolchain**: `rustup`, `rustc`, `cargo` (stable)
+- **Microsoft Edge WebView2 Runtime**: Pre-installed on Windows 10/11 (or install via [WebView2 Evergreen Bootstrapper](https://go.microsoft.com/fwlink/p/?LinkId=2124703)).
+- **Tauri CLI**: `cargo install tauri-cli --version "^2.0.0"`
 
-### 2. Run in Development Mode
-You can run the browser directly with Cargo or using the Tauri CLI:
-
-#### Using Cargo:
+### 1. Run in Development Mode
+From the project root:
 ```powershell
-cd D:\MyProject\pollol258\src-tauri
-cargo run
-```
-
-#### Using Tauri CLI:
-```powershell
-# From project root:
 cargo tauri dev
 ```
 
-### 3. Build Production Installer (MSI / NSIS)
+Or from the `src-tauri` directory:
 ```powershell
-cd D:\MyProject\pollol258\src-tauri
+cd src-tauri
+cargo run
+```
+
+### 2. Build Production Installer (MSI / NSIS)
+```powershell
 cargo tauri build
 ```
 The output installers will be generated under:
-`src-tauri/target/release/bundle/nsis/` (Single `.exe` installer)  
-`src-tauri/target/release/bundle/msi/` (Windows `.msi` package)
+- `src-tauri/target/release/bundle/nsis/` (Single `.exe` installer)
+- `src-tauri/target/release/bundle/msi/` (Windows `.msi` package)
 
 ---
 
-## ⌨️ Keyboard Shortcuts
+## ⌨️ Default Shortcuts
 
 | Shortcut | Action |
 | :--- | :--- |
@@ -127,15 +130,15 @@ The output installers will be generated under:
 | `Ctrl + R` / `F5` | Reload page |
 | `Alt + Left` | Navigate back |
 | `Alt + Right` | Navigate forward |
-| `Ctrl + Shift + N` | Open new private window (in-memory incognito profile) |
+| `Ctrl + Shift + N` | Open new private window |
+| `Ctrl + B` | Toggle Bookmarks bar / view |
+| `Ctrl + J` | Open Downloads manager |
 | `Ctrl + ,` | Open Settings & Preferences |
 | `Esc` | Stop loading / dismiss popovers |
 
 ---
 
-## 🛡️ Security & Privacy Architecture
+## 📄 License & Author
 
-- **Context Isolation**: Web pages run in isolated child WebView2 instances with restricted IPC privileges. Untrusted page code cannot invoke arbitrary native commands.
-- **Windows DPAPI Vault**: Passwords saved on websites are encrypted with machine/user-bound Windows DPAPI (`CryptProtectData`). They cannot be read outside the active Windows user session.
-- **Zero Telemetry**: No phone-home calls, no crash analytics, no external tracking.
-- **Private Browsing**: Private windows utilize ephemeral data directories (`incognito_<uuid>`) that do not write cookies, history, or cache to persistent storage.
+- **Author**: Md. Ziaur Rahman (<zia.r@aol.com>)
+- **License**: GNU General Public License v3.0 or later ([GPL-3.0-or-later](LICENSE))

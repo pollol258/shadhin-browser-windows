@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Tab</title>
+    <style>
+        /* Reset & Base Styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body, html {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background-color: #1a1a1a;
+        }
+
+        /* Video Background */
+        #bg-video {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            min-width: 100%;
+            min-height: 100%;
+            width: auto;
+            height: auto;
+            transform: translateX(-50%) translateY(-50%);
+            z-index: 0;
+            object-fit: cover;
+            opacity: 0.8;
+            transition: opacity 1s ease-in-out;
+        }
+
+        /* Dark Overlay */
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.7) 100%);
+            z-index: 1;
+        }
+
+        /* Main Container */
+        .container {
+            position: relative;
+            z-index: 2;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            transform: translateY(-2vh);
+        }
+
+        /* Weather Widget */
+        .weather-widget {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 8px 16px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            margin-bottom: 20px;
+            font-size: 1rem;
+            font-weight: 500;
+            opacity: 1; /* Set to 1 to avoid invisible widget if API fails */
+        }
+
+        .weather-icon { font-size: 1.5rem; }
+
+        /* Clock & Greeting */
+        .clock {
+            font-size: 5.5rem;
+            font-weight: 300;
+            letter-spacing: -2px;
+            margin-bottom: 5px;
+        }
+
+        .greeting {
+            font-size: 1.5rem;
+            font-weight: 400;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+
+        /* Search Bar (Glassmorphism) */
+        .search-container {
+            width: 100%;
+            max-width: 600px;
+            position: relative;
+            margin-bottom: 40px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 16px 24px;
+            font-size: 1.1rem;
+            color: #fff;
+            background: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 40px;
+            outline: none;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .search-input::placeholder { color: rgba(255, 255, 255, 0.7); }
+        .search-input:focus {
+            background: rgba(255, 255, 255, 0.25);
+            border-color: rgba(255, 255, 255, 0.5);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        .search-icon {
+            position: absolute;
+            right: 24px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.2rem;
+            color: rgba(255,255,255,0.7);
+            pointer-events: none;
+        }
+
+        /* Quick Links (Shortcuts) */
+        .shortcuts {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            max-width: 800px;
+        }
+
+        .shortcut {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 75px;
+            height: 75px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            text-decoration: none;
+            color: #fff;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .shortcut:hover {
+            background: rgba(255, 255, 255, 0.25);
+            transform: translateY(-3px);
+        }
+
+        .shortcut img {
+            width: 28px;
+            height: 28px;
+            margin-bottom: 6px;
+            border-radius: 4px;
+        }
+
+        .shortcut span.add-icon { font-size: 2rem; margin-bottom: 0; color: rgba(255,255,255,0.7); }
+        
+        .shortcut small {
+            font-size: 0.7rem;
+            opacity: 0.9;
+            max-width: 65px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: center;
+        }
+
+        /* Delete/Edit Buttons on Hover */
+        .shortcut-actions {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            display: none;
+            gap: 4px;
+        }
+
+        .shortcut:hover .shortcut-actions { display: flex; }
+
+        .action-btn {
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            width: 22px;
+            height: 22px;
+            font-size: 0.7rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .action-btn:hover { background: #ff4a5e; }
+
+        /* Add Shortcut Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(5px);
+            z-index: 10;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal.active { display: flex; }
+
+        .modal-content {
+            background: rgba(30, 30, 30, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 24px;
+            border-radius: 16px;
+            width: 320px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+
+        .modal-content h3 { margin-bottom: 16px; font-weight: 500; font-size: 1.2rem; }
+        
+        .modal-content input {
+            width: 100%;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            color: #fff;
+            outline: none;
+            font-size: 0.95rem;
+        }
+        .modal-content input:focus { border-color: #007aff; }
+
+        .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
+        .modal-actions button {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .btn-cancel { background: rgba(255,255,255,0.1); color: #fff; }
+        .btn-save { background: #007aff; color: #fff; }
+
+        /* Footer Branding */
+        .footer {
+            position: absolute;
+            bottom: 20px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 0.9rem;
+            letter-spacing: 1px;
+            z-index: 2;
+        }
+    </style>
+</head>
+<body>
+
+    <video autoplay muted loop playsinline id="bg-video"></video>
+    <div class="overlay"></div>
+
+    <div class="container">
+        <!-- Weather Widget -->
+        <div class="weather-widget" id="weather-widget">
+            <span class="weather-icon" id="weather-icon">🌤️</span>
+            <span id="weather-temp">--°C</span>
+            <span id="weather-city" style="opacity: 0.7; font-size: 0.9rem;">Loading...</span>
+        </div>
+
+        <div class="clock" id="clock">00:00</div>
+        <div class="greeting" id="greeting">শুভ দিন</div>
+
+        <div class="search-container">
+            <input type="text" id="search-input" class="search-input" placeholder="Search Google or type a URL..." autocomplete="off">
+            <span class="search-icon">🔍</span>
+        </div>
+
+        <!-- Quick Links Container -->
+        <div class="shortcuts" id="shortcuts-container">
+            <!-- Shortcuts will be injected here by JS -->
+        </div>
+    </div>
+
+    <div class="footer">স্বাধীন ব্রাউজার (Shadhin-Browser)</div>
+
+    <!-- Add/Edit Modal -->
+    <div class="modal" id="shortcut-modal">
+        <div class="modal-content">
+            <h3 id="modal-title">Add Shortcut</h3>
+            <input type="text" id="shortcut-name" placeholder="Name (e.g. YouTube)" autocomplete="off">
+            <input type="text" id="shortcut-url" placeholder="URL (e.g. youtube.com)" autocomplete="off">
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+                <button class="btn-save" onclick="saveShortcut()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. Clock & Greeting Logic
+        // ==========================================
+        function updateClock() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('clock').textContent = `${hours}:${minutes}`;
+
+            const hour = now.getHours();
+            let greeting = "শুভ রাত্রি";
+            if (hour >= 5 && hour < 12) greeting = "শুভ সকাল";
+            else if (hour >= 12 && hour < 16) greeting = "শুভ দুপুর";
+            else if (hour >= 16 && hour < 19) greeting = "শুভ বিকেল";
+            else if (hour >= 19 && hour < 22) greeting = "শুভ সন্ধ্যা";
+            document.getElementById('greeting').textContent = greeting;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // ==========================================
+        // 2. Time-Based Video Rotation
+        // ==========================================
+        function setVideoBackground() {
+            const hour = new Date().getHours();
+            const video = document.getElementById('bg-video');
+            let videoSrc = "";
+
+            // লোকাল ভিডিও ব্যবহার করতে চাইলে এখানে "./morning.mp4" ইত্যাদি দিন
+            if (hour >= 6 && hour < 12) {
+                 videoSrc = "bg.mp4";
+            } else if (hour >= 12 && hour < 18) {
+                 videoSrc = "ev.mp4";
+            } else {
+                 videoSrc = "night.mp4";
+            }
+            
+            video.src = videoSrc;
+            video.load();
+            video.play().catch(e => console.log("Autoplay prevented:", e));
+        }
+        setVideoBackground();
+
+        // ==========================================
+        // 3. Weather Widget
+        // ==========================================
+        function getWeatherEmoji(code) {
+            if (code === 0) return "☀️";
+            if (code === 1 || code === 2 || code === 3) return "⛅";
+            if (code === 45 || code === 48) return "🌫️";
+            if (code >= 51 && code <= 67) return "🌧️";
+            if (code >= 71 && code <= 77) return "❄️";
+            if (code >= 80 && code <= 82) return "🌦️";
+            if (code >= 95 && code <= 99) return "⛈️";
+            return "🌤️";
+        }
+
+        async function fetchWeather(lat, lon, cityName) {
+            try {
+                const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+                const data = await response.json();
+                if (data && data.current_weather) {
+                    document.getElementById('weather-temp').textContent = `${Math.round(data.current_weather.temperature)}°C`;
+                    document.getElementById('weather-icon').textContent = getWeatherEmoji(data.current_weather.weathercode);
+                    document.getElementById('weather-city').textContent = cityName;
+                }
+            } catch (error) {
+                console.error("Weather error", error);
+                document.getElementById('weather-city').textContent = "Dhaka";
+            }
+        }
+
+        function initWeather() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => fetchWeather(pos.coords.latitude, pos.coords.longitude, "My Location"),
+                    () => fetchWeather(23.8103, 90.4125, "Dhaka, BD"),
+                    { timeout: 5000 }
+                );
+            } else {
+                fetchWeather(23.8103, 90.4125, "Dhaka, BD");
+            }
+        }
+        initWeather();
+
+        // ==========================================
+        // 4. Customizable Shortcuts
+        // ==========================================
+        let shortcuts = [];
+        const defaultShortcuts = [
+            { name: 'YouTube', url: 'https://youtube.com' },
+            { name: 'Facebook', url: 'https://facebook.com' },
+            { name: 'GitHub', url: 'https://github.com' }
+        ];
+
+        let editingIndex = -1; 
+        const shortcutsContainer = document.getElementById('shortcuts-container');
+
+        // Load shortcuts safely
+        function loadShortcuts() {
+            try {
+                const stored = localStorage.getItem('shadhin_shortcuts');
+                if (stored) {
+                    shortcuts = JSON.parse(stored);
+                } else {
+                    shortcuts = [...defaultShortcuts];
+                }
+            } catch (e) {
+                console.error("Error reading localStorage, resetting to default.", e);
+                shortcuts = [...defaultShortcuts];
+            }
+            renderShortcuts();
+        }
+
+        // Render to DOM
+        function renderShortcuts() {
+            shortcutsContainer.innerHTML = '';
+
+            shortcuts.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = 'shortcut';
+                div.onclick = () => navigate(item.url);
+
+                // Fetch favicon
+                let domain = item.url.replace(/^https?:\/\//, '').split('/')[0];
+                let faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+
+                div.innerHTML = `
+                    <img src="${faviconUrl}" alt="${item.name}" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                    <span style="display:none;">🌐</span>
+                    <small>${item.name}</small>
+                    <div class="shortcut-actions">
+                        <button class="action-btn" onclick="editShortcut(event, ${index})" title="Edit">✏️</button>
+                        <button class="action-btn" onclick="deleteShortcut(event, ${index})" title="Delete">✖</button>
+                    </div>
+                `;
+                shortcutsContainer.appendChild(div);
+            });
+
+            // Add "+" button
+            const addBtn = document.createElement('div');
+            addBtn.className = 'shortcut';
+            addBtn.style.background = 'rgba(255, 255, 255, 0.05)'; // Slightly dimmer
+            addBtn.onclick = () => openModal(-1);
+            addBtn.innerHTML = `
+                <span class="add-icon">+</span>
+                <small>Add</small>
+            `;
+            shortcutsContainer.appendChild(addBtn);
+        }
+
+        // Modal Logic
+        function openModal(index) {
+            editingIndex = index;
+            const modal = document.getElementById('shortcut-modal');
+            const inputName = document.getElementById('shortcut-name');
+            const inputUrl = document.getElementById('shortcut-url');
+            
+            if (index === -1) {
+                document.getElementById('modal-title').textContent = "Add Shortcut";
+                inputName.value = '';
+                inputUrl.value = '';
+            } else {
+                document.getElementById('modal-title').textContent = "Edit Shortcut";
+                inputName.value = shortcuts[index].name;
+                inputUrl.value = shortcuts[index].url;
+            }
+            modal.classList.add('active');
+            inputName.focus();
+        }
+
+        function closeModal() {
+            document.getElementById('shortcut-modal').classList.remove('active');
+        }
+
+        function saveShortcut() {
+            const name = document.getElementById('shortcut-name').value.trim();
+            let url = document.getElementById('shortcut-url').value.trim();
+            
+            if (!name || !url) return alert("Please enter both name and URL");
+
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                url = 'https://' + url;
+            }
+
+            if (editingIndex === -1) {
+                shortcuts.push({ name, url });
+            } else {
+                shortcuts[editingIndex] = { name, url };
+            }
+
+            try {
+                localStorage.setItem('shadhin_shortcuts', JSON.stringify(shortcuts));
+            } catch(e) { console.error("Could not save to localStorage", e); }
+            
+            renderShortcuts();
+            closeModal();
+        }
+
+        function deleteShortcut(event, index) {
+            event.stopPropagation();
+            shortcuts.splice(index, 1);
+            try {
+                localStorage.setItem('shadhin_shortcuts', JSON.stringify(shortcuts));
+            } catch(e) {}
+            renderShortcuts();
+        }
+
+        function editShortcut(event, index) {
+            event.stopPropagation();
+            openModal(index);
+        }
+
+        // ==========================================
+        // 5. Navigation
+        // ==========================================
+        function navigate(url) {
+            if (window.__TAURI_INTERNALS__) {
+                window.__TAURI_INTERNALS__.invoke('navigate_to', { url: url });
+            } else {
+                window.location.href = url;
+            }
+        }
+
+        document.getElementById('search-input').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                const query = this.value.trim();
+                if (query) navigate(query);
+            }
+        });
+
+        // Initialize IMMEDIATELY (not waiting for load event to prevent blank screen)
+        loadShortcuts();
+        document.getElementById('search-input').focus();
+    </script>
+</body>
+</html>

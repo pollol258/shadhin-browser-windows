@@ -1,5 +1,7 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewBuilder, WebviewUrl};
 
 use crate::blocker::AdBlocker;
@@ -17,16 +19,59 @@ pub struct AppState {
     pub password_manager: Arc<PasswordManager>,
     pub download_manager: Arc<DownloadManager>,
     pub ad_blocker: Arc<AdBlocker>,
+    pub bookmark_manager: Arc<crate::bookmarks::BookmarkManager>,
     pub fullscreen_manager: Arc<FullscreenManager>,
+    pub toolbar_expanded: Arc<AtomicBool>,
+    pub last_create_tab: Arc<Mutex<Option<std::time::Instant>>>,
     pub app_data_dir: PathBuf,
 }
+
+#[cfg(windows)]
+fn raise_toolbar_to_top(app: &AppHandle) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+    if let Some(tb) = app.get_webview("toolbar") {
+        let _ = tb.with_webview(|p| unsafe {
+            let controller = p.controller();
+            let mut hwnd: *mut core::ffi::c_void = std::ptr::null_mut();
+            if controller.ParentWindow(&mut hwnd as *mut _ as *mut _).is_ok()
+                && !hwnd.is_null()
+            {
+                let _ = SetWindowPos(
+                    windows::Win32::Foundation::HWND(hwnd),
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        });
+    }
+}
+
+#[cfg(not(windows))]
+fn raise_toolbar_to_top(_app: &AppHandle) {}
 
 #[tauri::command]
 pub async fn create_tab(
     app: AppHandle,
-    state: State<'_, AppState>,
     url: Option<String>,
 ) -> Result<TabInfo, String> {
+    let state = app.state::<AppState>();
+
+    {
+        let mut g = state.last_create_tab.lock().unwrap();
+        if let Some(t) = *g {
+            if t.elapsed() < std::time::Duration::from_millis(120) {
+                return Err("create_tab throttled".to_string());
+            }
+        }
+        *g = Some(std::time::Instant::now());
+    }
+
     let window = app.get_window("main").ok_or("Main window not found")?;
     let size = window.inner_size().map_err(|e| e.to_string())?;
     let scale_factor = window.scale_factor().unwrap_or(1.0);
@@ -47,16 +92,48 @@ pub async fn create_tab(
 
     let tab_id = uuid::Uuid::new_v4().to_string();
     let tab_label = format!("tab_{}", tab_id);
-    let initial_raw = url.unwrap_or_else(|| state.settings_manager.get().homepage);
-    let target_url = navigation::normalize_url(&initial_raw, &state.settings_manager.get().search_engine);
 
-    let parsed_url: url::Url = target_url
-        .parse()
-        .unwrap_or_else(|_| "https://duckduckgo.com".parse().unwrap());
+    // Check if new tab should load local newtab.html
+    let is_local_newtab = match url.as_deref() {
+        None | Some("newtab.html") | Some("about:newtab") | Some("shadhin://newtab") => true,
+        Some(raw) if raw.trim() == "about:blank" || raw.trim().is_empty() => true,
+        _ => false,
+    };
 
-    let mut builder = WebviewBuilder::new(&tab_label, WebviewUrl::External(parsed_url))
-        .initialization_script(PAGE_INJECTION_SCRIPT)
+    let (webview_url, target_url) = if is_local_newtab {
+        (WebviewUrl::App("newtab.html".into()), "newtab.html".to_string())
+    } else {
+        let (search_engine, homepage) = {
+            let s = state.settings_manager.get();
+            (s.search_engine.clone(), s.homepage.clone())
+        };
+        let raw = url.as_deref().unwrap_or(&homepage);
+        let normalized = navigation::normalize_url(raw, &search_engine);
+        let parsed: url::Url = normalized
+            .parse()
+            .unwrap_or_else(|_| "https://duckduckgo.com".parse().unwrap());
+        (WebviewUrl::External(parsed), normalized)
+    };
+
+    let tab_info = TabInfo {
+        id: tab_id.clone(),
+        label: tab_label.clone(),
+        title: "New Tab".to_string(),
+        url: target_url,
+        favicon: None,
+        is_loading: !is_local_newtab,
+        can_go_back: false,
+        can_go_forward: false,
+    };
+
+    {
+        let mut mgr = state.tab_manager.lock().unwrap();
+        mgr.add_tab(tab_info.clone());
+    }
+
+    let mut builder = WebviewBuilder::new(&tab_label, webview_url)
         .zoom_hotkeys_enabled(true)
+        .initialization_script(PAGE_INJECTION_SCRIPT)
         .additional_browser_args(
             "--autoplay-policy=no-user-gesture-required --enable-features=VaapiVideoDecoder,OverlayScrollbar --enable-gpu-rasterization"
         );
@@ -70,6 +147,12 @@ pub async fn create_tab(
     let app_action = app.clone();
     builder = builder.on_web_resource_request(move |req, res| {
         let uri_str = req.uri().to_string();
+        if uri_str.starts_with("tauri://")
+            || uri_str.starts_with("http://tauri.localhost")
+            || uri_str.starts_with("https://tauri.localhost")
+        {
+            return;
+        }
         if uri_str.starts_with("http://shadhin.action/") {
             *res.status_mut() = http::StatusCode::NO_CONTENT;
             let path = uri_str.strip_prefix("http://shadhin.action/").unwrap_or_default().to_string();
@@ -110,13 +193,40 @@ pub async fn create_tab(
         }));
     });
 
-    // Page load status update
+    // Page load status update and deferred native hooks
     let app_load = app.clone();
     let tab_id_load = tab_id.clone();
+    let tab_label_load = tab_label.clone();
     let tab_mgr_load = state.tab_manager.clone();
+    let hooks_wired = Arc::new(AtomicBool::new(false));
+    let state_dl_hooks = state.download_manager.clone();
+    let state_st_hooks = state.settings_manager.clone();
+    let state_bl_hooks = state.ad_blocker.clone();
+
     builder = builder.on_page_load(move |_wv, payload| {
         let is_loading = matches!(payload.event(), tauri::webview::PageLoadEvent::Started);
         let url_str = payload.url().to_string();
+
+        if is_loading {
+            if !hooks_wired.swap(true, Ordering::AcqRel) {
+                let app_h = app_load.clone();
+                let label = tab_label_load.clone();
+                let dl = state_dl_hooks.clone();
+                let st = state_st_hooks.clone();
+                let bl = state_bl_hooks.clone();
+                tauri::async_runtime::spawn(async move {
+                    // give the WebView2 controller one tick to start pumping
+                    tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                    #[cfg(windows)]
+                    if let Some(wv) = app_h.get_webview(&label) {
+                        let _ = crate::downloads::hook_tab_download(app_h.clone(), &wv, dl, st);
+                        let _ = crate::blocker::hook_tab_blocker(app_h.clone(), &wv, bl);
+                        let _ = crate::fullscreen::hook_tab_fullscreen(app_h, &wv);
+                    }
+                });
+            }
+        }
+
         {
             let mut mgr = tab_mgr_load.lock().unwrap();
             if let Some(tab) = mgr.find_tab_mut(&tab_id_load) {
@@ -133,72 +243,14 @@ pub async fn create_tab(
         }));
     });
 
-    // Download interception
-    let app_dl = app.clone();
-    let dl_mgr = state.download_manager.clone();
-    let settings_mgr = state.settings_manager.clone();
-    builder = builder.on_download(move |_wv, event| match event {
-        tauri::webview::DownloadEvent::Requested { url, destination } => {
-            let settings = settings_mgr.get();
-            let target_dir = settings
-                .download_dir
-                .as_ref()
-                .map(PathBuf::from)
-                .or_else(dirs::download_dir)
-                .unwrap_or_else(|| PathBuf::from("."));
-
-            let fname = destination
-                .file_name()
-                .and_then(|f| f.to_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    url.path_segments()
-                        .and_then(|segments| segments.last())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| "download.bin".to_string());
-
-            let safe_fname: String = fname
-                .chars()
-                .map(|c| match c {
-                    '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-                    other => other,
-                })
-                .collect();
-
-            *destination = target_dir.join(&safe_fname);
-
-            let item = dl_mgr.register_download(url.as_str(), destination);
-            let _ = app_dl.emit("download-started", &item);
-            if let Some(tb) = app_dl.get_webview("toolbar") {
-                let _ = tb.eval(&format!(
-                    "if (window.__onDownloadStarted) {{ window.__onDownloadStarted({}); }}",
-                    serde_json::to_string(&item).unwrap_or_default()
-                ));
-            }
-            true
+    // Intercept new window requests (target="_blank", window.open, "Open link in new window")
+    let app_new_window = app.clone();
+    builder = builder.on_new_window(move |url, _features| {
+        let scheme = url.scheme();
+        if scheme == "http" || scheme == "https" {
+            let _ = app_new_window.emit("open-url-in-new-tab", url.to_string());
         }
-        tauri::webview::DownloadEvent::Finished { url, success, .. } => {
-            dl_mgr.complete_download_by_url(url.as_str(), success);
-            let item = dl_mgr.find_by_url(url.as_str());
-            let payload = serde_json::json!({
-                "url": url.as_str(),
-                "success": success,
-                "filename": item.as_ref().map(|i| i.filename.clone()).unwrap_or_default(),
-                "save_path": item.as_ref().map(|i| i.save_path.clone()).unwrap_or_default()
-            });
-            let _ = app_dl.emit("download-finished", &payload);
-            if let Some(tb) = app_dl.get_webview("toolbar") {
-                let _ = tb.eval(&format!(
-                    "if (window.__onDownloadFinished) {{ window.__onDownloadFinished({}); }}",
-                    serde_json::to_string(&payload).unwrap_or_default()
-                ));
-            }
-            true
-        }
-        _ => true,
+        tauri::webview::NewWindowResponse::Deny
     });
 
     // Add child webview to main window
@@ -210,21 +262,7 @@ pub async fn create_tab(
         )
         .map_err(|e| format!("Failed to create child webview: {}", e))?;
 
-    let tab_info = TabInfo {
-        id: tab_id.clone(),
-        label: tab_label,
-        title: "New Tab".to_string(),
-        url: target_url,
-        favicon: None,
-        is_loading: true,
-        can_go_back: false,
-        can_go_forward: false,
-    };
-
-    {
-        let mut mgr = state.tab_manager.lock().unwrap();
-        mgr.add_tab(tab_info.clone());
-    }
+    raise_toolbar_to_top(&app);
 
     let _ = app.emit("tab-created", &tab_info);
     let _ = app.emit("tab-switched", serde_json::json!({ "id": tab_id }));
@@ -256,11 +294,17 @@ pub async fn switch_tab(
     };
 
     // Hide all other webviews, show target active webview
+    let is_fs = state.fullscreen_manager.is_fullscreen();
     for tab in all_tabs {
         if let Some(wv) = app.get_webview(&tab.label) {
             if Some(&tab.label) == active_label.as_ref() {
-                let _ = wv.set_position(LogicalPosition::new(0.0, TOOLBAR_HEIGHT));
-                let _ = wv.set_size(LogicalSize::new(logical_width, content_height));
+                if is_fs {
+                    let _ = wv.set_position(LogicalPosition::new(0.0, 0.0));
+                    let _ = wv.set_size(LogicalSize::new(logical_width, logical_height));
+                } else {
+                    let _ = wv.set_position(LogicalPosition::new(0.0, TOOLBAR_HEIGHT));
+                    let _ = wv.set_size(LogicalSize::new(logical_width, content_height));
+                }
                 let _ = wv.show();
             } else {
                 let _ = wv.hide();
@@ -295,7 +339,7 @@ pub async fn close_tab(
 
     if is_empty {
         // If all tabs closed, create a fresh new tab
-        let _ = create_tab(app, state, None).await?;
+        let _ = create_tab(app, None).await?;
     } else if let Some(next_id) = next_active_id {
         switch_tab(app, state, next_id).await?;
     }
@@ -467,6 +511,78 @@ pub fn clear_downloads(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn pause_download(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.download_manager.pause(&app, &id)
+}
+
+#[tauri::command]
+pub fn resume_download(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.download_manager.resume(&app, &id)
+}
+
+#[tauri::command]
+pub fn cancel_download(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.download_manager.cancel(&app, &id)
+}
+
+#[tauri::command]
+pub fn retry_download(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let item = state.download_manager.get(&id).ok_or_else(|| "Download not found".to_string())?;
+    let tab_label = {
+        let tm = state.tab_manager.lock().unwrap();
+        tm.get_active_tab().map(|t| t.label.clone())
+    };
+
+    if let Some(label) = tab_label {
+        if let Some(wv) = app.get_webview(&label) {
+            let script = format!(
+                "{{ const a = document.createElement('a'); a.href = {}; a.download = ''; document.body.appendChild(a); a.click(); a.remove(); }}",
+                serde_json::to_string(&item.url).unwrap_or_default()
+            );
+            wv.eval(&script).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    }
+    Err("No active browser tab found to retry download".to_string())
+}
+
+#[tauri::command]
+pub fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.download_manager.remove(&id)
+}
+
+#[tauri::command]
+pub fn delete_download_file(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.download_manager.delete_file(&id)
+}
+
+#[tauri::command]
+pub async fn pick_download_folder() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::downloads::pick_folder().map(|p| p.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn open_downloads_folder(state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings_manager.get();
+    let folder = settings
+        .download_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(dirs::download_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    DownloadManager::open_folder(&folder).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn check_download_file_exists(state: State<'_, AppState>, id: String) -> Result<bool, String> {
+    Ok(state.download_manager.file_exists(&id))
+}
+
+#[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
     Ok(state.settings_manager.get())
 }
@@ -549,43 +665,53 @@ pub fn clear_browsing_data(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn new_private_window(
+fn spawn_browser_window(
     app: AppHandle,
-    state: State<'_, AppState>,
+    url: url::Url,
+    private: bool,
 ) -> Result<(), String> {
-    // In-memory private window mode
-    let private_id = uuid::Uuid::new_v4().to_string();
-    let win_label = format!("private_{}", private_id);
+    let state = app.state::<AppState>();
+    let id = uuid::Uuid::new_v4().to_string();
 
-    let win = tauri::window::WindowBuilder::new(&app, &win_label)
-        .title("Shadhin-Browser (Private Window)")
-        .inner_size(1100.0, 750.0)
-        .decorations(false)
-        .resizable(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let win_label = if private {
+        format!("private_{}", id)
+    } else {
+        format!("window_{}", id)
+    };
 
-    let private_profile_dir = state
-        .app_data_dir
-        .join("profiles")
-        .join(format!("incognito_{}", private_id));
+    let profile_subdir = if private {
+        format!("profiles/incognito_{}", id)
+    } else {
+        // Use a unique directory per window to prevent WebView2 lock conflicts
+        // with the main window which uses "profiles/default".
+        format!("profiles/window_{}", id)
+    };
+    let profile_dir = state.app_data_dir.join(profile_subdir);
 
     let app_action = app.clone();
     let blocker = state.ad_blocker.clone();
-    let wv_builder = WebviewBuilder::new(
-        format!("pv_wv_{}", private_id),
-        WebviewUrl::External("https://duckduckgo.com".parse().unwrap()),
+
+    // Use WebviewWindowBuilder instead of WindowBuilder + add_child
+    let _win = tauri::WebviewWindowBuilder::new(
+        &app,
+        &win_label,
+        tauri::WebviewUrl::External(url),
     )
-    .data_directory(private_profile_dir)
-    .incognito(true)
+    .title(if private { "Shadhin-Browser (Private)" } else { "Shadhin-Browser" })
+    .inner_size(1100.0, 750.0)
+    .decorations(true) // IMPORTANT: Allow native OS title bar so user can close/minimize
+    .incognito(private)
+    .data_directory(profile_dir)
     .zoom_hotkeys_enabled(true)
     .initialization_script(PAGE_INJECTION_SCRIPT)
     .on_web_resource_request(move |req, res| {
         let uri_str = req.uri().to_string();
         if uri_str.starts_with("http://shadhin.action/") {
             *res.status_mut() = http::StatusCode::NO_CONTENT;
-            let path = uri_str.strip_prefix("http://shadhin.action/").unwrap_or_default().to_string();
+            let path = uri_str
+                .strip_prefix("http://shadhin.action/")
+                .unwrap_or_default()
+                .to_string();
             let app_h = app_action.clone();
             handle_injected_action(&app_h, &path);
             return;
@@ -604,75 +730,20 @@ pub async fn new_private_window(
                 ));
             }
         }
-    });
-
-    let app_dl_pv = app.clone();
-    let dl_mgr_pv = state.download_manager.clone();
-    let wv_builder = wv_builder.on_download(move |_wv, event| match event {
-        tauri::webview::DownloadEvent::Requested { url, destination } => {
-            let target_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
-            let fname = destination
-                .file_name()
-                .and_then(|f| f.to_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    url.path_segments()
-                        .and_then(|segments| segments.last())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| "download.bin".to_string());
-
-            let safe_fname: String = fname
-                .chars()
-                .map(|c| match c {
-                    '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-                    other => other,
-                })
-                .collect();
-
-            *destination = target_dir.join(&safe_fname);
-
-            let item = dl_mgr_pv.register_download(url.as_str(), destination);
-            let _ = app_dl_pv.emit("download-started", &item);
-            if let Some(tb) = app_dl_pv.get_webview("toolbar") {
-                let _ = tb.eval(&format!(
-                    "if (window.__onDownloadStarted) {{ window.__onDownloadStarted({}); }}",
-                    serde_json::to_string(&item).unwrap_or_default()
-                ));
-            }
-            true
-        }
-        tauri::webview::DownloadEvent::Finished { url, success, .. } => {
-            dl_mgr_pv.complete_download_by_url(url.as_str(), success);
-            let item = dl_mgr_pv.find_by_url(url.as_str());
-            let payload = serde_json::json!({
-                "url": url.as_str(),
-                "success": success,
-                "filename": item.as_ref().map(|i| i.filename.clone()).unwrap_or_default(),
-                "save_path": item.as_ref().map(|i| i.save_path.clone()).unwrap_or_default()
-            });
-            let _ = app_dl_pv.emit("download-finished", &payload);
-            if let Some(tb) = app_dl_pv.get_webview("toolbar") {
-                let _ = tb.eval(&format!(
-                    "if (window.__onDownloadFinished) {{ window.__onDownloadFinished({}); }}",
-                    serde_json::to_string(&payload).unwrap_or_default()
-                ));
-            }
-            true
-        }
-        _ => true,
-    });
-
-    win.add_child(
-        wv_builder,
-        LogicalPosition::new(0.0, 0.0),
-        LogicalSize::new(1100.0, 750.0),
-    )
+    })
+    .build()
     .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn new_private_window(
+    app: AppHandle,
+    _state: State<'_, AppState>,
+) -> Result<(), String> {
+    let url: url::Url = "https://duckduckgo.com".parse().unwrap();
+    spawn_browser_window(app, url, true)
 }
 
 #[tauri::command]
@@ -702,6 +773,30 @@ pub fn get_blocked_count(state: State<'_, AppState>) -> Result<usize, String> {
 }
 
 #[tauri::command]
+pub fn tracker_blocked_dom(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    count: Option<usize>,
+) -> Result<usize, String> {
+    if !state.ad_blocker.is_enabled() {
+        return Ok(state.ad_blocker.get_blocked_count());
+    }
+    let c = count.unwrap_or(1);
+    let total = state.ad_blocker.add_blocked(c);
+    println!("[AdBlock] DOM Blocked via invoke: +{} (total: {})", c, total);
+    let _ = app.emit("tracker-blocked", serde_json::json!({
+        "count": total
+    }));
+    if let Some(tb) = app.get_webview("toolbar") {
+        let _ = tb.eval(&format!(
+            "if (window.__onTrackerBlocked) {{ window.__onTrackerBlocked({}); }}",
+            total
+        ));
+    }
+    Ok(total)
+}
+
+#[tauri::command]
 pub fn on_login_submitted(
     app: AppHandle,
     origin: String,
@@ -719,17 +814,10 @@ pub fn on_login_submitted(
 #[tauri::command]
 pub fn on_fullscreen_element_changed(
     app: AppHandle,
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     is_fullscreen: bool,
 ) -> Result<(), String> {
-    let active_label = {
-        let mgr = state.tab_manager.lock().unwrap();
-        mgr.get_active_tab().map(|t| t.label.clone())
-    };
-    state
-        .fullscreen_manager
-        .set_fullscreen(&app, active_label.as_deref(), is_fullscreen)
-        .map_err(|e| e.to_string())?;
+    crate::fullscreen::handle_fullscreen_transition(&app, is_fullscreen);
     Ok(())
 }
 
@@ -742,8 +830,37 @@ pub fn focus_address_bar(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct WindowSizeInfo {
+    pub width: f64,
+    pub height: f64,
+}
+
+#[tauri::command]
+pub fn get_window_size(app: AppHandle) -> Result<WindowSizeInfo, String> {
+    if let Some(win) = app.get_window("main") {
+        let size = win.inner_size().map_err(|e| e.to_string())?;
+        let scale = win.scale_factor().unwrap_or(1.0);
+        Ok(WindowSizeInfo {
+            width: size.width as f64 / scale,
+            height: size.height as f64 / scale,
+        })
+    } else {
+        Err("Main window not found".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn log_frontend(_msg: String) {}
+
 #[tauri::command]
 pub fn set_toolbar_expanded(app: AppHandle, expanded: bool, height: Option<f64>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if state.fullscreen_manager.is_fullscreen() {
+        return Ok(());
+    }
+    state.toolbar_expanded.store(expanded, Ordering::Relaxed);
+
     if let Some(win) = app.get_window("main") {
         let size = win.inner_size().map_err(|e| e.to_string())?;
         let scale = win.scale_factor().unwrap_or(1.0);
@@ -760,6 +877,25 @@ pub fn set_toolbar_expanded(app: AppHandle, expanded: bool, height: Option<f64>)
             let _ = tb.set_size(LogicalSize::new(width, target_height));
             if expanded {
                 let _ = tb.set_focus();
+
+                #[cfg(windows)]
+                {
+                    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE};
+                    let _ = tb.with_webview(|platform_webview| {
+                        unsafe {
+                            let controller = platform_webview.controller();
+                            let mut raw_hwnd: *mut core::ffi::c_void = std::ptr::null_mut();
+                            if controller.ParentWindow(&mut raw_hwnd as *mut _ as *mut _).is_ok() && !raw_hwnd.is_null() {
+                                let _ = SetWindowPos(
+                                    windows::Win32::Foundation::HWND(raw_hwnd),
+                                    HWND_TOP,
+                                    0, 0, 0, 0,
+                                    SWP_NOMOVE | SWP_NOSIZE,
+                                );
+                            }
+                        }
+                    });
+                }
             }
         }
     }
@@ -782,6 +918,42 @@ pub fn toggle_devtools(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_bookmarks(state: State<'_, AppState>) -> Result<Vec<crate::bookmarks::BookmarkItem>, String> {
+    Ok(state.bookmark_manager.get_all())
+}
+
+#[tauri::command]
+pub fn save_bookmark(
+    state: State<'_, AppState>,
+    title: String,
+    url: String,
+) -> Result<crate::bookmarks::BookmarkItem, String> {
+    Ok(state.bookmark_manager.add(title, url))
+}
+
+#[tauri::command]
+pub fn delete_bookmark(state: State<'_, AppState>, id: String) -> Result<bool, String> {
+    Ok(state.bookmark_manager.remove(&id))
+}
+
+#[tauri::command]
+pub fn is_bookmarked(state: State<'_, AppState>, url: String) -> Result<bool, String> {
+    let all = state.bookmark_manager.get_all();
+    Ok(all.iter().any(|b| b.url == url))
+}
+
+fn parse_url_param(action: &str) -> Option<url::Url> {
+    let full = format!("http://shadhin.action/{}", action);
+    let parsed = url::Url::parse(&full).ok()?;
+    let raw = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "url")
+        .map(|(_, v)| v.into_owned())?;
+    if raw.trim().is_empty() { return None; }
+    url::Url::parse(&raw).ok()
+}
+
 /// Central dispatcher for shortcuts and actions sent from injected content scripts
 pub fn handle_injected_action(app: &AppHandle, action: &str) {
     let state = app.state::<AppState>();
@@ -789,8 +961,7 @@ pub fn handle_injected_action(app: &AppHandle, action: &str) {
         "create_tab" => {
             let app_c = app.clone();
             tauri::async_runtime::spawn(async move {
-                let st = app_c.state::<AppState>();
-                let _ = create_tab(app_c.clone(), st, None).await;
+                let _ = create_tab(app_c.clone(), None).await;
             });
         }
         "close_active_tab" => {
@@ -824,8 +995,18 @@ pub fn handle_injected_action(app: &AppHandle, action: &str) {
         "toggle_downloads" => {
             let _ = app.emit("trigger-shortcut", "toggle-downloads");
         }
+        "toggle_bookmarks" => {
+            let _ = app.emit("trigger-shortcut", "toggle-bookmarks");
+        }
         "open_settings" => {
             let _ = app.emit("trigger-shortcut", "open-settings");
+        }
+        "dismiss_popovers" => {
+            if state.toolbar_expanded.load(Ordering::Relaxed) {
+                if let Some(tb) = app.get_webview("toolbar") {
+                    let _ = tb.eval("if (window.__closeAllPopovers) { window.__closeAllPopovers(); }");
+                }
+            }
         }
         "switch_next_tab" => {
             let _ = app.emit("trigger-shortcut", "switch-next-tab");
@@ -842,7 +1023,18 @@ pub fn handle_injected_action(app: &AppHandle, action: &str) {
         other if other.starts_with("switch_tab_") => {
             let _ = app.emit("trigger-shortcut", other);
         }
+        action if action.starts_with("on_fullscreen_element_changed") => {
+            let is_fs = if let Some(q) = action.split('?').nth(1) {
+                q.split('&').any(|p| p == "isFullscreen=true" || p == "is_fullscreen=true")
+            } else {
+                false
+            };
+            crate::fullscreen::handle_fullscreen_transition(app, is_fs);
+        }
         action if action.starts_with("tracker_blocked_dom") => {
+            if !state.ad_blocker.is_enabled() {
+                return;
+            }
             let count = if let Some(q) = action.split('?').nth(1) {
                 q.split('&')
                     .find_map(|pair| {
@@ -859,6 +1051,7 @@ pub fn handle_injected_action(app: &AppHandle, action: &str) {
             };
 
             let total = state.ad_blocker.add_blocked(count);
+            println!("[AdBlock] DOM Blocked via ping: +{} (total: {})", count, total);
             let _ = app.emit("tracker-blocked", serde_json::json!({
                 "count": total
             }));
@@ -867,6 +1060,30 @@ pub fn handle_injected_action(app: &AppHandle, action: &str) {
                     "if (window.__onTrackerBlocked) {{ window.__onTrackerBlocked({}); }}",
                     total
                 ));
+            }
+        }
+        action if action.starts_with("open_url_new_tab") => {
+            if let Some(u) = parse_url_param(action) {
+                let app_c = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = create_tab(app_c, Some(u.to_string())).await;
+                });
+            }
+        }
+        action if action.starts_with("open_url_new_window") => {
+            if let Some(u) = parse_url_param(action) {
+                let app_c = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = spawn_browser_window(app_c, u, false);
+                });
+            }
+        }
+        action if action.starts_with("open_url_private_window") => {
+            if let Some(u) = parse_url_param(action) {
+                let app_c = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = spawn_browser_window(app_c, u, true);
+                });
             }
         }
         _ => {}

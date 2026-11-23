@@ -208,3 +208,56 @@ impl PasswordManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dpapi_encryption_decryption_roundtrip() {
+        let sample_secret = "super_secure_p@ssw0rd_123!_#";
+        let description = "Unit Test Secret";
+
+        let encrypted = PasswordManager::encrypt_dpapi(sample_secret.as_bytes(), description)
+            .expect("DPAPI encryption must succeed");
+        assert!(!encrypted.is_empty());
+        assert_ne!(encrypted, sample_secret.as_bytes());
+
+        let decrypted_bytes = PasswordManager::decrypt_dpapi(&encrypted)
+            .expect("DPAPI decryption must succeed");
+        let decrypted_str = String::from_utf8(decrypted_bytes).expect("Valid UTF-8");
+
+        assert_eq!(decrypted_str, sample_secret);
+    }
+
+    #[test]
+    fn test_password_manager_isolated_vault() {
+        let temp_dir = std::env::temp_dir().join(format!("shadhin_pwd_test_{}", Uuid::new_v4()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let mgr = PasswordManager::new(temp_dir.clone());
+        assert!(mgr.get_all_entries().is_empty());
+
+        // Save password
+        mgr.save_password("https://github.com", "pollol", "gh_pass_secret!")
+            .expect("save password succeeds");
+
+        let entries = mgr.get_all_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].origin, "https://github.com");
+        assert_eq!(entries[0].username, "pollol");
+        assert_eq!(entries[0].password_preview, "gh_pass_secret!");
+
+        // Retrieve credential for origin
+        let cred = mgr.get_credentials_for_origin("https://github.com");
+        assert_eq!(cred, Some(("pollol".to_string(), "gh_pass_secret!".to_string())));
+
+        // Delete password
+        let entry_id = entries[0].id.clone();
+        mgr.delete_password(&entry_id).expect("delete password succeeds");
+        assert!(mgr.get_all_entries().is_empty());
+
+        // Clean up temporary test vault directory
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+}

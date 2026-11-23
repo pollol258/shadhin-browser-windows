@@ -1,0 +1,23 @@
+[Desktop Entry]
+Version=1.1
+Type=Application
+Name=Shadhin Browser
+GenericName=Web Browser
+Comment=Fast, memory-efficient, and privacy-first desktop web browser
+Keywords=Internet;WWW;Browser;Web;Explorer;Privacy;Adblock;
+Exec=shadhin-browser %U
+Terminal=false
+X-MultipleArgs=false
+Icon=shadhin-browser
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rss+xml;application/rdf+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+Actions=new-window;new-private-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=shadhin-browser --new-window %U
+
+[Desktop Action new-private-window]
+Name=New Private Window
+Exec=shadhin-browser --incognito %U
